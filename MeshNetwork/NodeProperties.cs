@@ -1,33 +1,52 @@
 ﻿using System;
+using System.Linq;
+using System.Net;
 
 namespace MeshNetwork
 {
-    internal struct NodeProperties
+    public struct NodeProperties
     {
-        private string _host;
+        private IPAddress _ip;
 
         private int _port;
 
         public NodeProperties(string networkAddress)
         {
-            try
+            string hostname = networkAddress.Split(':')[0];
+            IPHostEntry hostEntry = Dns.GetHostEntry(hostname);
+            _ip = hostEntry.AddressList.FirstOrDefault(e => e.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
+            if (_ip == null)
             {
-                _host = networkAddress.Split(':')[0];
-                _port = int.Parse(networkAddress.Split(':')[1]);
+                throw new Exception("Could not resolve hostname \"" + hostname + "\".");
             }
-            catch (Exception)
+
+            if (!int.TryParse(networkAddress.Split(':')[1], out _port))
             {
-                throw new Exception("Malformed network address: " + networkAddress);
+                throw new Exception("Malformed port.");
             }
         }
 
         public NodeProperties(string host, int port)
         {
-            _host = host;
+            IPHostEntry hostEntry = Dns.GetHostEntry(host);
+            if (hostEntry.AddressList.Length > 0)
+            {
+                _ip = hostEntry.AddressList[0];
+            }
+            else
+            {
+                throw new Exception("Could not resolve hostname \"" + host + "\".");
+            }
             _port = port;
         }
 
-        public string Host { get { return _host; } }
+        public NodeProperties(IPAddress ip, int port)
+        {
+            _ip = ip;
+            _port = port;
+        }
+
+        public IPAddress IP { get { return _ip; } }
 
         public int Port { get { return _port; } }
     }
