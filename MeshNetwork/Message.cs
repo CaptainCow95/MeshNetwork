@@ -1,4 +1,6 @@
-﻿namespace MeshNetwork
+﻿using System;
+
+namespace MeshNetwork
 {
     internal class Message
     {
@@ -8,13 +10,12 @@
 
         public Message(string rawMessage, NodeProperties sender)
         {
-            _sender = sender;
-
-            for (int i = 0; i < rawMessage.Length; ++i)
+            int index = 0;
+            do
             {
-                if (!char.IsDigit(rawMessage[i]))
+                if (!char.IsDigit(rawMessage[index]))
                 {
-                    switch (rawMessage[i])
+                    switch (rawMessage[index])
                     {
                         case 'p':
                             _type = MessageType.Ping;
@@ -29,10 +30,31 @@
                             break;
                     }
 
-                    _data = rawMessage.Substring(i + 1, rawMessage.Length - (i + 1));
                     break;
                 }
-            }
+
+                ++index;
+            } while (index < rawMessage.Length);
+
+            ++index;
+
+            int senderPort = 0;
+            do
+            {
+                if (!char.IsDigit(rawMessage[index]))
+                {
+                    _sender = new NodeProperties(sender.IP, senderPort);
+                    _data = rawMessage.Substring(index + 1, rawMessage.Length - (index + 1));
+                    break;
+                }
+                else
+                {
+                    senderPort *= 10;
+                    senderPort += (int)char.GetNumericValue(rawMessage[index]);
+                }
+
+                ++index;
+            } while (index < rawMessage.Length);
         }
 
         public string Data
@@ -48,6 +70,11 @@
         public MessageType Type
         {
             get { return _type; }
+        }
+
+        public override string ToString()
+        {
+            return "Type: " + Enum.GetName(typeof(MessageType), _type) + " Sender: " + _sender.IP + ":" + _sender.Port + " Data: " + _data;
         }
     }
 }

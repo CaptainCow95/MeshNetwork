@@ -13,7 +13,6 @@ namespace MeshNetwork
         internal static int PingFrequency = 10;
         private Thread _connectionListenerThread;
         private bool _connectionListenerThreadRunning;
-        private volatile Dictionary<NodeProperties, NetworkConnection> _connections = new Dictionary<NodeProperties, NetworkConnection>();
         private object _lockObject;
         private Logger _logger;
         private Thread _messageListenerThread;
@@ -23,7 +22,9 @@ namespace MeshNetwork
         private Thread _pingThread;
         private bool _pingThreadRunning;
         private int _port;
-        private Queue<Message> _recievedMessages = new Queue<Message>();
+        private Queue<Tuple<Message, NodeProperties>> _recievedMessages = new Queue<Tuple<Message, NodeProperties>>();
+        private volatile Dictionary<NodeProperties, NetworkConnection> _recievingConnections = new Dictionary<NodeProperties, NetworkConnection>();
+        private volatile Dictionary<NodeProperties, NetworkConnection> _sendingConnections = new Dictionary<NodeProperties, NetworkConnection>();
         private TcpListener _socketListener;
 
         public NetworkNode(string logLocation)
@@ -67,10 +68,9 @@ namespace MeshNetwork
                     try
                     {
                         _logger.Write("Attempting connection to " + neighbor.IP + ":" + neighbor.Port);
-                        //TcpClient client = new TcpClient(new IPEndPoint(neighbor.IP, neighbor.Port));
-                        client = new TcpClient(new IPEndPoint(IPAddress.Loopback, _port));
+                        client = new TcpClient();
                         client.Connect(new IPEndPoint(neighbor.IP, neighbor.Port));
-                        _connections[neighbor] = new NetworkConnection() { Client = client, LastPingRecieved = DateTime.UtcNow };
+                        _sendingConnections[neighbor] = new NetworkConnection() { Client = client, LastPingRecieved = DateTime.UtcNow };
                         _logger.Write("Connection to " + neighbor.IP + ":" + neighbor.Port + " successful");
                     }
                     catch (Exception)
@@ -79,7 +79,7 @@ namespace MeshNetwork
                         {
                             client.Close();
                         }
-                        _connections.Remove(neighbor);
+                        _sendingConnections.Remove(neighbor);
                         _messages.Remove(neighbor);
                         _logger.Write("Connection to " + neighbor.IP + ":" + neighbor.Port + " failed");
                     }
@@ -114,7 +114,7 @@ namespace MeshNetwork
                 NodeProperties incomingNodeProperties = new NodeProperties(ipEndPoint.Address.MapToIPv4(), ipEndPoint.Port);
                 lock (_lockObject)
                 {
-                    _connections[incomingNodeProperties] = new NetworkConnection() { Client = incomingTcpClient, LastPingRecieved = DateTime.UtcNow };
+                    _recievingConnections[incomingNodeProperties] = new NetworkConnection() { Client = incomingTcpClient, LastPingRecieved = DateTime.UtcNow };
                 }
                 _logger.Write("Connection recieved from " + incomingNodeProperties.IP + ":" + incomingNodeProperties.Port);
             }
@@ -140,18 +140,18 @@ namespace MeshNetwork
             {
                 lock (_lockObject)
                 {
-                    foreach (var key in _connections.Keys)
+                    foreach (var key in _recievingConnections.Keys)
                     {
                         if (!_messages.ContainsKey(key))
                         {
                             _messages[key] = new MessageBuilder();
                         }
 
-                        int availableBytes = _connections[key].Client.Available;
+                        int availableBytes = _recievingConnections[key].Client.Available;
                         if (availableBytes > 0)
                         {
                             byte[] buffer = new byte[availableBytes];
-                            _connections[key].Client.GetStream().Read(buffer, 0, availableBytes);
+                            _recievingConnections[key].Client.GetStream().Read(buffer, 0, availableBytes);
                             _messages[key].Message.Append(Encoding.Default.GetString(buffer));
 
                             if (_messages[key].Length == -1 && _messages[key].Message.Length > 0)
@@ -166,13 +166,14 @@ namespace MeshNetwork
                                     else
                                     {
                                         _messages[key].Length = int.Parse(messageLength.ToString());
+                                        break;
                                     }
                                 }
                             }
 
                             if (_messages[key].Length != -1 && _messages[key].Message.Length >= _messages[key].Length)
                             {
-                                _recievedMessages.Enqueue(new Message(_messages[key].Message.ToString(0, _messages[key].Length), key));
+                                _recievedMessages.Enqueue(new Tuple<Message, NodeProperties>(new Message(_messages[key].Message.ToString(0, _messages[key].Length), key), key));
                                 _messages[key].Message.Remove(0, _messages[key].Length);
                             }
                         }
@@ -203,18 +204,18 @@ namespace MeshNetwork
         {
             while (_recievedMessages.Count > 0)
             {
-                Message message = _recievedMessages.Dequeue();
-                _logger.Write("Message recieved of type " + Enum.GetName(typeof(MessageType), message.Type) + ": " + message.Data);
-                switch (message.Type)
+                var messageObject = _recievedMessages.Dequeue();
+                _logger.Write("Message recieved, " + messageObject.Item1.ToString());
+                switch (messageObject.Item1.Type)
                 {
                     case MessageType.Ping:
-                        RecievedPing(message.Sender);
+                        RecievedPing(messageObject.Item1.Sender, messageObject.Item2);
                         break;
 
                     case MessageType.User:
                         if (RecievedMessage != null)
                         {
-                            RecievedMessage(this, new RecievedMessageEventArgs(message.Data, message.Sender));
+                            RecievedMessage(this, new RecievedMessageEventArgs(messageObject.Item1.Data, messageObject.Item1.Sender));
                         }
                         break;
 
@@ -224,11 +225,19 @@ namespace MeshNetwork
             }
         }
 
-        private void RecievedPing(NodeProperties sender)
+        private void RecievedPing(NodeProperties sender, NodeProperties recievingConnection)
         {
             lock (_lockObject)
             {
-                _connections[sender].LastPingRecieved = DateTime.UtcNow;
+                if (_sendingConnections.ContainsKey(sender))
+                {
+                    _sendingConnections[sender].LastPingRecieved = DateTime.UtcNow;
+                }
+
+                if (_recievingConnections.ContainsKey(recievingConnection))
+                {
+                    _recievingConnections[recievingConnection].LastPingRecieved = DateTime.UtcNow;
+                }
             }
         }
 
@@ -249,7 +258,9 @@ namespace MeshNetwork
                     return false;
             }
 
-            int length = message.Length + 1;
+            string portString = _port.ToString() + ":";
+
+            int length = message.Length + 1 + portString.Length;
 
             int magnitude = 0;
             int tempLength = length;
@@ -276,17 +287,20 @@ namespace MeshNetwork
 
             lock (_lockObject)
             {
-                if (!_connections.ContainsKey(sendTo))
+                if (!_sendingConnections.ContainsKey(sendTo))
                 {
                     TcpClient client = null;
                     try
                     {
-                        client = new TcpClient(new IPEndPoint(IPAddress.Loopback, _port));
+                        _logger.Write("Attempting connection to " + sendTo.IP + ":" + sendTo.Port);
+                        client = new TcpClient();
                         client.Connect(sendTo.IP, sendTo.Port);
-                        _connections[sendTo] = new NetworkConnection() { Client = client, LastPingRecieved = DateTime.UtcNow };
+                        _sendingConnections[sendTo] = new NetworkConnection() { Client = client, LastPingRecieved = DateTime.UtcNow };
+                        _logger.Write("Connection to " + sendTo.IP + ":" + sendTo.Port + " successful");
                     }
                     catch
                     {
+                        _logger.Write("Connection to " + sendTo.IP + ":" + sendTo.Port + " failed");
                         if (client != null)
                         {
                             client.Close();
@@ -296,15 +310,17 @@ namespace MeshNetwork
                     }
                 }
 
-                byte[] buffer = Encoding.Default.GetBytes(length.ToString() + typeChar + message);
+                byte[] buffer = Encoding.Default.GetBytes(length.ToString() + typeChar + portString + message);
                 try
                 {
-                    _connections[sendTo].Client.GetStream().Write(buffer, 0, buffer.Length);
+                    _sendingConnections[sendTo].Client.GetStream().Write(buffer, 0, buffer.Length);
+                    _logger.Write("Message sending successful");
                 }
                 catch
                 {
-                    _connections[sendTo].Client.Close();
-                    _connections.Remove(sendTo);
+                    _logger.Write("Message sending failed");
+                    _sendingConnections[sendTo].Client.Close();
+                    _sendingConnections.Remove(sendTo);
                     _messages.Remove(sendTo);
                     return false;
                 }
