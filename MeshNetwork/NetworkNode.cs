@@ -7,39 +7,125 @@ using System.Threading;
 
 namespace MeshNetwork
 {
+    /// <summary>
+    /// Represents a node on the network.
+    /// </summary>
     public class NetworkNode
     {
+        /// <summary>
+        /// The number of seconds between pings before a client is considered disconnected.
+        /// </summary>
         internal static int ConnectionTimeout = 20;
-        internal static int PingFrequency = 10;
-        private Thread _connectionListenerThread;
-        private bool _connectionListenerThreadRunning;
-        private object _lockObject = new object();
-        private Thread _messageListenerThread;
-        private bool _messageListenerThreadRunning;
-        private Dictionary<NodeProperties, MessageBuilder> _messages = new Dictionary<NodeProperties, MessageBuilder>();
-        private volatile List<NodeProperties> _neighbors = new List<NodeProperties>();
-        private Thread _pingThread;
-        private bool _pingThreadRunning;
-        private int _port;
-        private Queue<Tuple<Message, NodeProperties>> _recievedMessages = new Queue<Tuple<Message, NodeProperties>>();
-        private volatile Dictionary<NodeProperties, NetworkConnection> _recievingConnections = new Dictionary<NodeProperties, NetworkConnection>();
-        private volatile Dictionary<NodeProperties, NetworkConnection> _sendingConnections = new Dictionary<NodeProperties, NetworkConnection>();
-        private TcpListener _socketListener;
 
+        /// <summary>
+        /// The number of seconds between pings.
+        /// </summary>
+        internal static int PingFrequency = 10;
+
+        /// <summary>
+        /// The object listening for new incoming connections.
+        /// </summary>
+        private TcpListener _connectionListener;
+
+        /// <summary>
+        /// The thread that is listening for new connections.
+        /// </summary>
+        private Thread _connectionListenerThread;
+
+        /// <summary>
+        /// Whether the thread listening for new connections should be running.
+        /// </summary>
+        private bool _connectionListenerThreadRunning;
+
+        /// <summary>
+        /// The object to lock on.
+        /// </summary>
+        private object _lockObject = new object();
+
+        /// <summary>
+        /// The thread that is listening for new messages.
+        /// </summary>
+        private Thread _messageListenerThread;
+
+        /// <summary>
+        /// Whether the thread listening for new messages should be running.
+        /// </summary>
+        private bool _messageListenerThreadRunning;
+
+        /// <summary>
+        /// A dictionary of all the messages currently being recieved.
+        /// </summary>
+        private Dictionary<NodeProperties, MessageBuilder> _messages = new Dictionary<NodeProperties, MessageBuilder>();
+
+        /// <summary>
+        /// A list of all of the neighbors.
+        /// </summary>
+        private volatile List<NodeProperties> _neighbors = new List<NodeProperties>();
+
+        /// <summary>
+        /// The thread sending out pings.
+        /// </summary>
+        private Thread _pingThread;
+
+        /// <summary>
+        /// Whether the thread sending out pings should be running.
+        /// </summary>
+        private bool _pingThreadRunning;
+
+        /// <summary>
+        /// The port this node is currently running on.
+        /// </summary>
+        private int _port;
+
+        /// <summary>
+        /// A queue of the recieved full messages.
+        /// </summary>
+        private Queue<Tuple<Message, NodeProperties>> _recievedMessages = new Queue<Tuple<Message, NodeProperties>>();
+
+        /// <summary>
+        /// A dictionary of the connections this node is recieving messages on.
+        /// </summary>
+        private volatile Dictionary<NodeProperties, NetworkConnection> _recievingConnections = new Dictionary<NodeProperties, NetworkConnection>();
+
+        /// <summary>
+        /// A dictionary of the connections this node is sending messages on.
+        /// </summary>
+        private volatile Dictionary<NodeProperties, NetworkConnection> _sendingConnections = new Dictionary<NodeProperties, NetworkConnection>();
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="NetworkNode" /> class.
+        /// </summary>
         public NetworkNode()
         {
             Logger.Init(string.Empty);
         }
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="NetworkNode" /> class.
+        /// </summary>
+        /// <param name="logLocation">The location to log messages to.</param>
         public NetworkNode(string logLocation)
         {
             Logger.Init(logLocation);
         }
 
+        /// <summary>
+        /// The event handler used when a message is recieved.
+        /// </summary>
+        /// <param name="source">This object.</param>
+        /// <param name="args">The message that was recieved.</param>
         public delegate void RecievedMessageEventHandler(object source, RecievedMessageEventArgs args);
 
+        /// <summary>
+        /// The event to subscribe to in order to recieve messages.
+        /// </summary>
         public event RecievedMessageEventHandler RecievedMessage;
 
+        /// <summary>
+        /// Connects this node to a network.
+        /// </summary>
+        /// <param name="listeningPort">The port to listen on.</param>
+        /// <param name="nodes">The nodes to try to connect to.</param>
         public void ConnectToNetwork(int listeningPort, params string[] nodes)
         {
             _port = listeningPort;
@@ -57,8 +143,8 @@ namespace MeshNetwork
             _messageListenerThread = new Thread(MessageListenerThreadRun);
             _messageListenerThread.Start();
 
-            _socketListener = new TcpListener(IPAddress.Any, listeningPort);
-            _socketListener.Start();
+            _connectionListener = new TcpListener(IPAddress.Any, listeningPort);
+            _connectionListener.Start();
             _connectionListenerThreadRunning = true;
             _connectionListenerThread = new Thread(ConnectionListenerThreadRun);
             _connectionListenerThread.Start();
@@ -94,25 +180,37 @@ namespace MeshNetwork
             _pingThread.Start();
         }
 
+        /// <summary>
+        /// Disconnect from the network.
+        /// </summary>
         public void Disconnect()
         {
             Logger.Write("Shutting down");
             _pingThreadRunning = false;
             _connectionListenerThreadRunning = false;
             _messageListenerThreadRunning = false;
-            _socketListener.Stop();
+            _connectionListener.Stop();
         }
 
+        /// <summary>
+        /// Send a message to another node.
+        /// </summary>
+        /// <param name="sendTo">The node to send the message to.</param>
+        /// <param name="message">The message to send.</param>
+        /// <returns>A value indicating whether the message was successfully sent.</returns>
         public bool SendMessage(NodeProperties sendTo, string message)
         {
             return SendMessageInternal(sendTo, MessageType.User, message);
         }
 
+        /// <summary>
+        /// The run function for the connection listener thread.
+        /// </summary>
         private void ConnectionListenerThreadRun()
         {
             while (_connectionListenerThreadRunning)
             {
-                TcpClient incomingTcpClient = _socketListener.AcceptTcpClient();
+                TcpClient incomingTcpClient = _connectionListener.AcceptTcpClient();
                 IPEndPoint ipEndPoint = (IPEndPoint)incomingTcpClient.Client.RemoteEndPoint;
                 NodeProperties incomingNodeProperties = new NodeProperties(ipEndPoint.Address.MapToIPv4(), ipEndPoint.Port);
                 lock (_lockObject)
@@ -123,6 +221,10 @@ namespace MeshNetwork
             }
         }
 
+        /// <summary>
+        /// Gets a list of the neighboring nodes.
+        /// </summary>
+        /// <returns>The nodes that this node is connected to.</returns>
         private List<NodeProperties> GetNeighbors()
         {
             List<NodeProperties> ret = new List<NodeProperties>();
@@ -137,6 +239,9 @@ namespace MeshNetwork
             return ret;
         }
 
+        /// <summary>
+        /// The run function for the message listener thread.
+        /// </summary>
         private void MessageListenerThreadRun()
         {
             while (_messageListenerThreadRunning)
@@ -189,6 +294,9 @@ namespace MeshNetwork
             }
         }
 
+        /// <summary>
+        /// The run function for the ping thread.
+        /// </summary>
         private void PingThreadRun()
         {
             while (_pingThreadRunning)
@@ -203,6 +311,9 @@ namespace MeshNetwork
             }
         }
 
+        /// <summary>
+        /// Processes all recieved messages.
+        /// </summary>
         private void ProcessMessages()
         {
             while (_recievedMessages.Count > 0)
@@ -228,6 +339,11 @@ namespace MeshNetwork
             }
         }
 
+        /// <summary>
+        /// Called when a ping is recieved.
+        /// </summary>
+        /// <param name="sender">The ping sender.</param>
+        /// <param name="recievingConnection">The connection that recieved the ping.</param>
         private void RecievedPing(NodeProperties sender, NodeProperties recievingConnection)
         {
             lock (_lockObject)
@@ -244,6 +360,13 @@ namespace MeshNetwork
             }
         }
 
+        /// <summary>
+        /// Creates the message to send it to a node.
+        /// </summary>
+        /// <param name="sendTo">The node to send it to.</param>
+        /// <param name="type">The type of message to send.</param>
+        /// <param name="message">The message to send.</param>
+        /// <returns>A value indicating whether the message was successfully sent.</returns>
         private bool SendMessageInternal(NodeProperties sendTo, MessageType type, string message)
         {
             char typeChar = ' ';
