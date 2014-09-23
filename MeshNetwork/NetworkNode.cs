@@ -13,8 +13,7 @@ namespace MeshNetwork
         internal static int PingFrequency = 10;
         private Thread _connectionListenerThread;
         private bool _connectionListenerThreadRunning;
-        private object _lockObject;
-        private Logger _logger;
+        private object _lockObject = new object();
         private Thread _messageListenerThread;
         private bool _messageListenerThreadRunning;
         private Dictionary<NodeProperties, MessageBuilder> _messages = new Dictionary<NodeProperties, MessageBuilder>();
@@ -27,10 +26,14 @@ namespace MeshNetwork
         private volatile Dictionary<NodeProperties, NetworkConnection> _sendingConnections = new Dictionary<NodeProperties, NetworkConnection>();
         private TcpListener _socketListener;
 
+        public NetworkNode()
+        {
+            Logger.Init(string.Empty);
+        }
+
         public NetworkNode(string logLocation)
         {
-            _logger = new Logger(logLocation);
-            _lockObject = new Object();
+            Logger.Init(logLocation);
         }
 
         public delegate void RecievedMessageEventHandler(object source, RecievedMessageEventArgs args);
@@ -41,7 +44,7 @@ namespace MeshNetwork
         {
             _port = listeningPort;
 
-            _logger.Write("Connecting to a network: listening on " + listeningPort);
+            Logger.Write("Connecting to a network: listening on " + listeningPort);
             lock (_lockObject)
             {
                 foreach (var address in nodes)
@@ -67,11 +70,11 @@ namespace MeshNetwork
                     TcpClient client = null;
                     try
                     {
-                        _logger.Write("Attempting connection to " + neighbor.IP + ":" + neighbor.Port);
+                        Logger.Write("Attempting connection to " + neighbor.IP + ":" + neighbor.Port);
                         client = new TcpClient();
                         client.Connect(new IPEndPoint(neighbor.IP, neighbor.Port));
                         _sendingConnections[neighbor] = new NetworkConnection() { Client = client, LastPingRecieved = DateTime.UtcNow };
-                        _logger.Write("Connection to " + neighbor.IP + ":" + neighbor.Port + " successful");
+                        Logger.Write("Connection to " + neighbor.IP + ":" + neighbor.Port + " successful");
                     }
                     catch (Exception)
                     {
@@ -81,7 +84,7 @@ namespace MeshNetwork
                         }
                         _sendingConnections.Remove(neighbor);
                         _messages.Remove(neighbor);
-                        _logger.Write("Connection to " + neighbor.IP + ":" + neighbor.Port + " failed");
+                        Logger.Write("Connection to " + neighbor.IP + ":" + neighbor.Port + " failed");
                     }
                 }
             }
@@ -93,7 +96,7 @@ namespace MeshNetwork
 
         public void Disconnect()
         {
-            _logger.Write("Shutting down");
+            Logger.Write("Shutting down");
             _pingThreadRunning = false;
             _connectionListenerThreadRunning = false;
             _messageListenerThreadRunning = false;
@@ -116,7 +119,7 @@ namespace MeshNetwork
                 {
                     _recievingConnections[incomingNodeProperties] = new NetworkConnection() { Client = incomingTcpClient, LastPingRecieved = DateTime.UtcNow };
                 }
-                _logger.Write("Connection recieved from " + incomingNodeProperties.IP + ":" + incomingNodeProperties.Port);
+                Logger.Write("Connection recieved from " + incomingNodeProperties.IP + ":" + incomingNodeProperties.Port);
             }
         }
 
@@ -205,7 +208,7 @@ namespace MeshNetwork
             while (_recievedMessages.Count > 0)
             {
                 var messageObject = _recievedMessages.Dequeue();
-                _logger.Write("Message recieved, " + messageObject.Item1.ToString());
+                Logger.Write("Message recieved, " + messageObject.Item1.ToString());
                 switch (messageObject.Item1.Type)
                 {
                     case MessageType.Ping:
@@ -292,15 +295,15 @@ namespace MeshNetwork
                     TcpClient client = null;
                     try
                     {
-                        _logger.Write("Attempting connection to " + sendTo.IP + ":" + sendTo.Port);
+                        Logger.Write("Attempting connection to " + sendTo.IP + ":" + sendTo.Port);
                         client = new TcpClient();
                         client.Connect(sendTo.IP, sendTo.Port);
                         _sendingConnections[sendTo] = new NetworkConnection() { Client = client, LastPingRecieved = DateTime.UtcNow };
-                        _logger.Write("Connection to " + sendTo.IP + ":" + sendTo.Port + " successful");
+                        Logger.Write("Connection to " + sendTo.IP + ":" + sendTo.Port + " successful");
                     }
                     catch
                     {
-                        _logger.Write("Connection to " + sendTo.IP + ":" + sendTo.Port + " failed");
+                        Logger.Write("Connection to " + sendTo.IP + ":" + sendTo.Port + " failed");
                         if (client != null)
                         {
                             client.Close();
@@ -314,11 +317,11 @@ namespace MeshNetwork
                 try
                 {
                     _sendingConnections[sendTo].Client.GetStream().Write(buffer, 0, buffer.Length);
-                    _logger.Write("Message sending successful");
+                    Logger.Write("Message sending successful");
                 }
                 catch
                 {
-                    _logger.Write("Message sending failed");
+                    Logger.Write("Message sending failed");
                     _sendingConnections[sendTo].Client.Close();
                     _sendingConnections.Remove(sendTo);
                     _messages.Remove(sendTo);

@@ -3,20 +3,27 @@ using System.IO;
 
 namespace MeshNetwork
 {
-    internal class Logger
+    internal static class Logger
     {
-        private string _filename;
+        private static string _filename;
+        private static object _lockObject = new object();
 
-        public Logger(string filename)
+        public static void Init(string filename)
         {
             _filename = filename;
         }
 
-        public void Write(string message)
+        public static void Write(string message)
         {
-            using (StreamWriter file = new StreamWriter(_filename, true))
+            if (!string.IsNullOrEmpty(_filename))
             {
-                file.WriteLine(String.Concat(DateTime.UtcNow.ToString("M/d/yyyy HH:mm:ss"), ": ", message));
+                lock (_lockObject)
+                {
+                    using (StreamWriter file = new StreamWriter(_filename, true))
+                    {
+                        file.WriteLine(String.Concat(DateTime.UtcNow.ToString("M/d/yyyy HH:mm:ss"), ": ", message));
+                    }
+                }
             }
         }
     }
