@@ -23,58 +23,10 @@ namespace MeshNetwork
         private MessageType _type;
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="Message" /> class and parses a message into
-        /// its parts.
+        /// Initializes a new instance of the <see cref="Message" /> class.
         /// </summary>
-        /// <param name="rawMessage">The raw message as it was recieved.</param>
-        /// <param name="sender">The sender of the message.</param>
-        public Message(string rawMessage, NodeProperties sender)
+        private Message()
         {
-            int index = 0;
-            do
-            {
-                if (!char.IsDigit(rawMessage[index]))
-                {
-                    switch (rawMessage[index])
-                    {
-                        case 'p':
-                            _type = MessageType.Ping;
-                            break;
-
-                        case 'u':
-                            _type = MessageType.User;
-                            break;
-
-                        default:
-                            _type = MessageType.Unknown;
-                            break;
-                    }
-
-                    break;
-                }
-
-                ++index;
-            } while (index < rawMessage.Length);
-
-            ++index;
-
-            int senderPort = 0;
-            do
-            {
-                if (!char.IsDigit(rawMessage[index]))
-                {
-                    _sender = new NodeProperties(sender.IP, senderPort);
-                    _data = rawMessage.Substring(index + 1, rawMessage.Length - (index + 1));
-                    break;
-                }
-                else
-                {
-                    senderPort *= 10;
-                    senderPort += (int)char.GetNumericValue(rawMessage[index]);
-                }
-
-                ++index;
-            } while (index < rawMessage.Length);
         }
 
         /// <summary>
@@ -99,6 +51,126 @@ namespace MeshNetwork
         public MessageType Type
         {
             get { return _type; }
+        }
+
+        /// <summary>
+        /// Creates a message from the various parts.
+        /// </summary>
+        /// <param name="sendingPort">The port the message is being sent from.</param>
+        /// <param name="type">The type of message.</param>
+        /// <param name="data">The data to go along with the message.</param>
+        /// <returns>The compoosed message to be sent over the wire to the recieving node.</returns>
+        public static string CreateMessage(int sendingPort, MessageType type, string data)
+        {
+            char typeChar = ' ';
+            switch (type)
+            {
+                case MessageType.Neighbors:
+                    typeChar = 'n';
+                    break;
+
+                case MessageType.Ping:
+                    typeChar = 'p';
+                    break;
+
+                case MessageType.User:
+                    typeChar = 'u';
+                    break;
+
+                default:
+                    return null;
+            }
+
+            string portString = sendingPort.ToString() + ":";
+
+            int length = data.Length + 1 + portString.Length;
+
+            int magnitude = 0;
+            int tempLength = length;
+            while (tempLength > 0)
+            {
+                tempLength /= 10;
+                ++magnitude;
+            }
+
+            length += magnitude;
+
+            int magnitude2 = 0;
+            tempLength = length;
+            while (tempLength > 0)
+            {
+                tempLength /= 10;
+                ++magnitude2;
+            }
+
+            if (magnitude2 > magnitude)
+            {
+                ++length;
+            }
+
+            return length.ToString() + typeChar + portString + data;
+        }
+
+        /// <summary>
+        /// Creates a message object from a message that was recieved from another node.
+        /// </summary>
+        /// <param name="rawMessage">The raw message as it was recieved.</param>
+        /// <param name="sender">The sender of the message.</param>
+        public static Message Parse(string rawMessage, NodeProperties sender)
+        {
+            Message message = new Message();
+
+            int index = 0;
+            do
+            {
+                if (!char.IsDigit(rawMessage[index]))
+                {
+                    switch (rawMessage[index])
+                    {
+                        case 'n':
+                            message._type = MessageType.Neighbors;
+                            break;
+
+                        case 'p':
+                            message._type = MessageType.Ping;
+                            break;
+
+                        case 'u':
+                            message._type = MessageType.User;
+                            break;
+
+                        default:
+                            message._type = MessageType.Unknown;
+                            break;
+                    }
+
+                    break;
+                }
+
+                ++index;
+            } while (index < rawMessage.Length);
+
+            ++index;
+
+            int senderPort = 0;
+            do
+            {
+                if (!char.IsDigit(rawMessage[index]))
+                {
+                    message._sender = new NodeProperties(sender.IP, senderPort);
+                    message._data = rawMessage.Substring(index + 1, rawMessage.Length - (index + 1));
+                    break;
+                }
+                else
+                {
+                    senderPort *= 10;
+                    senderPort += (int)char.GetNumericValue(rawMessage[index]);
+                }
+
+                ++index;
+            } while (index < rawMessage.Length);
+
+            return message;
         }
 
         /// <inheritdoc></inheritdoc>

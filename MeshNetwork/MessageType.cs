@@ -6,6 +6,11 @@
     internal enum MessageType
     {
         /// <summary>
+        /// A message used to get all of a nodes neighbors.
+        /// </summary>
+        Neighbors,
+
+        /// <summary>
         /// A message used as a ping.
         /// </summary>
         Ping,
