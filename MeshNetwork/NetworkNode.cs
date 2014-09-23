@@ -82,6 +82,9 @@ namespace MeshNetwork
         /// </summary>
         private volatile Dictionary<NodeProperties, NetworkConnection> _recievingConnections = new Dictionary<NodeProperties, NetworkConnection>();
 
+        /// <summary>
+        /// A list of the retrieved results for neighbor requests.
+        /// </summary>
         private List<Tuple<NodeProperties, List<NodeProperties>>> _remoteNeighborsRetrieved = new List<Tuple<NodeProperties, List<NodeProperties>>>();
 
         /// <summary>
@@ -395,6 +398,11 @@ namespace MeshNetwork
             }
         }
 
+        /// <summary>
+        /// Called when a neighbor message is recieved.
+        /// </summary>
+        /// <param name="sender">The sender of the message.</param>
+        /// <param name="data">The data in the message.</param>
         private void RecievedNeighborsMessage(NodeProperties sender, string data)
         {
             if (string.IsNullOrEmpty(data))
