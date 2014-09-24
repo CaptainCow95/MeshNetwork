@@ -47,14 +47,12 @@ namespace MeshNetwork
         public NodeProperties(string host, int port)
         {
             IPHostEntry hostEntry = Dns.GetHostEntry(host);
-            if (hostEntry.AddressList.Length > 0)
-            {
-                _ip = hostEntry.AddressList[0];
-            }
-            else
+            _ip = hostEntry.AddressList.FirstOrDefault(e => e.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
+            if (_ip == null)
             {
                 throw new Exception("Could not resolve hostname \"" + host + "\".");
             }
+
             _port = port;
         }
 
