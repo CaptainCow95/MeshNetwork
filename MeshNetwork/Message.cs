@@ -62,7 +62,7 @@ namespace MeshNetwork
         /// <returns>The compoosed message to be sent over the wire to the recieving node.</returns>
         public static string CreateMessage(int sendingPort, MessageType type, string data)
         {
-            char typeChar = ' ';
+            char typeChar;
             switch (type)
             {
                 case MessageType.Neighbors:
@@ -81,7 +81,7 @@ namespace MeshNetwork
                     return null;
             }
 
-            string portString = sendingPort.ToString() + ":";
+            string portString = sendingPort + ":";
 
             int length = data.Length + 1 + portString.Length;
 
@@ -118,7 +118,7 @@ namespace MeshNetwork
         /// <param name="sender">The sender of the message.</param>
         public static Message Parse(string rawMessage, NodeProperties sender)
         {
-            Message message = new Message();
+            var message = new Message();
 
             int index = 0;
             do
@@ -157,16 +157,13 @@ namespace MeshNetwork
             {
                 if (!char.IsDigit(rawMessage[index]))
                 {
-                    message._sender = new NodeProperties(sender.IP, senderPort);
+                    message._sender = new NodeProperties(sender.IpAddress, senderPort);
                     message._data = rawMessage.Substring(index + 1, rawMessage.Length - (index + 1));
                     break;
                 }
-                else
-                {
-                    senderPort *= 10;
-                    senderPort += (int)char.GetNumericValue(rawMessage[index]);
-                }
 
+                senderPort *= 10;
+                senderPort += (int)char.GetNumericValue(rawMessage[index]);
                 ++index;
             } while (index < rawMessage.Length);
 
@@ -176,7 +173,7 @@ namespace MeshNetwork
         /// <inheritdoc></inheritdoc>
         public override string ToString()
         {
-            return "Type: " + Enum.GetName(typeof(MessageType), _type) + " Sender: " + _sender.IP + ":" + _sender.Port + " Data: " + _data;
+            return "Type: " + Enum.GetName(typeof(MessageType), _type) + " Sender: " + _sender.IpAddress + ":" + _sender.Port + " Data: " + _data;
         }
     }
 }

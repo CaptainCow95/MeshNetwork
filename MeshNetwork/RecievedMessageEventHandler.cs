@@ -10,12 +10,12 @@ namespace MeshNetwork
         /// <summary>
         /// The message that was recieved.
         /// </summary>
-        private string _message;
+        private readonly string _message;
 
         /// <summary>
         /// The sender of the message.
         /// </summary>
-        private NodeProperties _sender;
+        private readonly NodeProperties _sender;
 
         public RecievedMessageEventArgs(string message, NodeProperties sender)
         {

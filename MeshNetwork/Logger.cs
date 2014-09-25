@@ -9,14 +9,14 @@ namespace MeshNetwork
     internal static class Logger
     {
         /// <summary>
+        /// The object to lock on.
+        /// </summary>
+        private static readonly object LockObject = new object();
+
+        /// <summary>
         /// The current file being logged to.
         /// </summary>
         private static string _filename;
-
-        /// <summary>
-        /// The object to lock on.
-        /// </summary>
-        private static object _lockObject = new object();
 
         /// <summary>
         /// Initializes the file to be written to.
@@ -33,14 +33,13 @@ namespace MeshNetwork
         /// <param name="message">The message to write.</param>
         public static void Write(string message)
         {
-            if (!string.IsNullOrEmpty(_filename))
+            if (string.IsNullOrEmpty(_filename)) return;
+
+            lock (LockObject)
             {
-                lock (_lockObject)
+                using (var file = new StreamWriter(_filename, true))
                 {
-                    using (StreamWriter file = new StreamWriter(_filename, true))
-                    {
-                        file.WriteLine(String.Concat(DateTime.UtcNow.ToString("M/d/yyyy HH:mm:ss"), ": ", message));
-                    }
+                    file.WriteLine(String.Concat(DateTime.UtcNow.ToString("M/d/yyyy HH:mm:ss"), ": ", message));
                 }
             }
         }

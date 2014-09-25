@@ -8,14 +8,14 @@ namespace MeshNetwork
     internal class MessageBuilder
     {
         /// <summary>
+        /// The current contents of the message that have been recieved.
+        /// </summary>
+        private readonly StringBuilder _message = new StringBuilder();
+
+        /// <summary>
         /// The length of the final message.
         /// </summary>
         private int _length = -1;
-
-        /// <summary>
-        /// The current contents of the message that have been recieved.
-        /// </summary>
-        private StringBuilder _message = new StringBuilder();
 
         /// <summary>
         /// Gets or sets the length of the final message.

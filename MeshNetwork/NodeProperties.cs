@@ -12,12 +12,12 @@ namespace MeshNetwork
         /// <summary>
         /// The node's ip address.
         /// </summary>
-        private IPAddress _ip;
+        private readonly IPAddress _ipAddress;
 
         /// <summary>
         /// The node's listening port.
         /// </summary>
-        private int _port;
+        private readonly int _port;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="NodeProperties" /> structure.
@@ -27,8 +27,8 @@ namespace MeshNetwork
         {
             string hostname = networkAddress.Split(':')[0];
             IPHostEntry hostEntry = Dns.GetHostEntry(hostname);
-            _ip = hostEntry.AddressList.FirstOrDefault(e => e.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
-            if (_ip == null)
+            _ipAddress = hostEntry.AddressList.FirstOrDefault(e => e.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
+            if (_ipAddress == null)
             {
                 throw new Exception("Could not resolve hostname \"" + hostname + "\".");
             }
@@ -47,8 +47,8 @@ namespace MeshNetwork
         public NodeProperties(string host, int port)
         {
             IPHostEntry hostEntry = Dns.GetHostEntry(host);
-            _ip = hostEntry.AddressList.FirstOrDefault(e => e.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
-            if (_ip == null)
+            _ipAddress = hostEntry.AddressList.FirstOrDefault(e => e.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
+            if (_ipAddress == null)
             {
                 throw new Exception("Could not resolve hostname \"" + host + "\".");
             }
@@ -59,18 +59,18 @@ namespace MeshNetwork
         /// <summary>
         /// Initializes a new instance of the <see cref="NodeProperties" /> structure.
         /// </summary>
-        /// <param name="ip">The ip address.</param>
+        /// <param name="ipAddress">The ip address.</param>
         /// <param name="port">The port.</param>
-        public NodeProperties(IPAddress ip, int port)
+        public NodeProperties(IPAddress ipAddress, int port)
         {
-            _ip = ip;
+            _ipAddress = ipAddress;
             _port = port;
         }
 
         /// <summary>
         /// Gets the ip address.
         /// </summary>
-        public IPAddress IP { get { return _ip; } }
+        public IPAddress IpAddress { get { return _ipAddress; } }
 
         /// <summary>
         /// Gets the port.

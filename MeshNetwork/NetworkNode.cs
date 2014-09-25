@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -15,12 +16,32 @@ namespace MeshNetwork
         /// <summary>
         /// The number of seconds between pings before a client is considered disconnected.
         /// </summary>
-        internal static int ConnectionTimeout = 20;
+        internal const int ConnectionTimeout = 20;
 
         /// <summary>
         /// The number of seconds between pings.
         /// </summary>
-        internal static int PingFrequency = 10;
+        internal const int PingFrequency = 10;
+
+        /// <summary>
+        /// The object to lock on.
+        /// </summary>
+        private readonly object _lockObject = new object();
+
+        /// <summary>
+        /// A dictionary of all the messages currently being recieved.
+        /// </summary>
+        private readonly Dictionary<NodeProperties, MessageBuilder> _messages = new Dictionary<NodeProperties, MessageBuilder>();
+
+        /// <summary>
+        /// A queue of the recieved full messages.
+        /// </summary>
+        private readonly Queue<Tuple<Message, NodeProperties>> _recievedMessages = new Queue<Tuple<Message, NodeProperties>>();
+
+        /// <summary>
+        /// A list of the retrieved results for neighbor requests.
+        /// </summary>
+        private readonly List<Tuple<NodeProperties, List<NodeProperties>>> _remoteNeighborsRetrieved = new List<Tuple<NodeProperties, List<NodeProperties>>>();
 
         /// <summary>
         /// The object listening for new incoming connections.
@@ -38,11 +59,6 @@ namespace MeshNetwork
         private bool _connectionListenerThreadRunning;
 
         /// <summary>
-        /// The object to lock on.
-        /// </summary>
-        private object _lockObject = new object();
-
-        /// <summary>
         /// The thread that is listening for new messages.
         /// </summary>
         private Thread _messageListenerThread;
@@ -51,11 +67,6 @@ namespace MeshNetwork
         /// Whether the thread listening for new messages should be running.
         /// </summary>
         private bool _messageListenerThreadRunning;
-
-        /// <summary>
-        /// A dictionary of all the messages currently being recieved.
-        /// </summary>
-        private Dictionary<NodeProperties, MessageBuilder> _messages = new Dictionary<NodeProperties, MessageBuilder>();
 
         /// <summary>
         /// The thread sending out pings.
@@ -73,19 +84,9 @@ namespace MeshNetwork
         private int _port;
 
         /// <summary>
-        /// A queue of the recieved full messages.
-        /// </summary>
-        private Queue<Tuple<Message, NodeProperties>> _recievedMessages = new Queue<Tuple<Message, NodeProperties>>();
-
-        /// <summary>
         /// A dictionary of the connections this node is recieving messages on.
         /// </summary>
         private volatile Dictionary<NodeProperties, NetworkConnection> _recievingConnections = new Dictionary<NodeProperties, NetworkConnection>();
-
-        /// <summary>
-        /// A list of the retrieved results for neighbor requests.
-        /// </summary>
-        private List<Tuple<NodeProperties, List<NodeProperties>>> _remoteNeighborsRetrieved = new List<Tuple<NodeProperties, List<NodeProperties>>>();
 
         /// <summary>
         /// A dictionary of the connections this node is sending messages on.
@@ -142,7 +143,7 @@ namespace MeshNetwork
             _connectionListenerThread = new Thread(ConnectionListenerThreadRun);
             _connectionListenerThread.Start();
 
-            bool connected = false;
+            var connected = false;
             foreach (var neighbor in initialNodes)
             {
                 lock (_lockObject)
@@ -150,11 +151,11 @@ namespace MeshNetwork
                     TcpClient client = null;
                     try
                     {
-                        Logger.Write("Attempting connection to " + neighbor.IP + ":" + neighbor.Port);
+                        Logger.Write("Attempting connection to " + neighbor.IpAddress + ":" + neighbor.Port);
                         client = new TcpClient();
-                        client.Connect(new IPEndPoint(neighbor.IP, neighbor.Port));
-                        _sendingConnections[neighbor] = new NetworkConnection() { Client = client, LastPingRecieved = DateTime.UtcNow };
-                        Logger.Write("Connection to " + neighbor.IP + ":" + neighbor.Port + " successful, retrieving neighbors");
+                        client.Connect(new IPEndPoint(neighbor.IpAddress, neighbor.Port));
+                        _sendingConnections[neighbor] = new NetworkConnection { Client = client, LastPingRecieved = DateTime.UtcNow };
+                        Logger.Write("Connection to " + neighbor.IpAddress + ":" + neighbor.Port + " successful, retrieving neighbors");
                         connected = true;
                         break;
                     }
@@ -166,7 +167,7 @@ namespace MeshNetwork
                         }
                         _sendingConnections.Remove(neighbor);
                         _messages.Remove(neighbor);
-                        Logger.Write("Connection to " + neighbor.IP + ":" + neighbor.Port + " failed");
+                        Logger.Write("Connection to " + neighbor.IpAddress + ":" + neighbor.Port + " failed");
                     }
                 }
             }
@@ -180,11 +181,11 @@ namespace MeshNetwork
                         TcpClient client = null;
                         try
                         {
-                            Logger.Write("Attempting connection to " + neighbor.IP + ":" + neighbor.Port);
+                            Logger.Write("Attempting connection to " + neighbor.IpAddress + ":" + neighbor.Port);
                             client = new TcpClient();
-                            client.Connect(new IPEndPoint(neighbor.IP, neighbor.Port));
-                            _sendingConnections[neighbor] = new NetworkConnection() { Client = client, LastPingRecieved = DateTime.UtcNow };
-                            Logger.Write("Connection to " + neighbor.IP + ":" + neighbor.Port + " successful");
+                            client.Connect(new IPEndPoint(neighbor.IpAddress, neighbor.Port));
+                            _sendingConnections[neighbor] = new NetworkConnection { Client = client, LastPingRecieved = DateTime.UtcNow };
+                            Logger.Write("Connection to " + neighbor.IpAddress + ":" + neighbor.Port + " successful");
                         }
                         catch (Exception)
                         {
@@ -194,7 +195,7 @@ namespace MeshNetwork
                             }
                             _sendingConnections.Remove(neighbor);
                             _messages.Remove(neighbor);
-                            Logger.Write("Connection to " + neighbor.IP + ":" + neighbor.Port + " failed");
+                            Logger.Write("Connection to " + neighbor.IpAddress + ":" + neighbor.Port + " failed");
                         }
                     }
                 }
@@ -225,10 +226,10 @@ namespace MeshNetwork
         /// <returns>The nodes that this node is connected to.</returns>
         public List<NodeProperties> GetNeighbors()
         {
-            List<NodeProperties> ret = new List<NodeProperties>();
+            var ret = new List<NodeProperties>();
             lock (_lockObject)
             {
-                foreach (NodeProperties node in _sendingConnections.Keys)
+                foreach (var node in _sendingConnections.Keys)
                 {
                     if (!ret.Contains(node))
                     {
@@ -283,14 +284,14 @@ namespace MeshNetwork
         {
             while (_connectionListenerThreadRunning)
             {
-                TcpClient incomingTcpClient = _connectionListener.AcceptTcpClient();
-                IPEndPoint ipEndPoint = (IPEndPoint)incomingTcpClient.Client.RemoteEndPoint;
-                NodeProperties incomingNodeProperties = new NodeProperties(ipEndPoint.Address.MapToIPv4(), ipEndPoint.Port);
+                var incomingTcpClient = _connectionListener.AcceptTcpClient();
+                var ipEndPoint = (IPEndPoint)incomingTcpClient.Client.RemoteEndPoint;
+                var incomingNodeProperties = new NodeProperties(ipEndPoint.Address.MapToIPv4(), ipEndPoint.Port);
                 lock (_lockObject)
                 {
-                    _recievingConnections[incomingNodeProperties] = new NetworkConnection() { Client = incomingTcpClient, LastPingRecieved = DateTime.UtcNow };
+                    _recievingConnections[incomingNodeProperties] = new NetworkConnection { Client = incomingTcpClient, LastPingRecieved = DateTime.UtcNow };
                 }
-                Logger.Write("Connection recieved from " + incomingNodeProperties.IP + ":" + incomingNodeProperties.Port);
+                Logger.Write("Connection recieved from " + incomingNodeProperties.IpAddress + ":" + incomingNodeProperties.Port);
             }
         }
 
@@ -310,17 +311,17 @@ namespace MeshNetwork
                             _messages[key] = new MessageBuilder();
                         }
 
-                        int availableBytes = _recievingConnections[key].Client.Available;
+                        var availableBytes = _recievingConnections[key].Client.Available;
                         if (availableBytes > 0)
                         {
-                            byte[] buffer = new byte[availableBytes];
+                            var buffer = new byte[availableBytes];
                             _recievingConnections[key].Client.GetStream().Read(buffer, 0, availableBytes);
                             _messages[key].Message.Append(Encoding.Default.GetString(buffer));
 
                             if (_messages[key].Length == -1 && _messages[key].Message.Length > 0)
                             {
-                                StringBuilder messageLength = new StringBuilder();
-                                for (int i = 0; i < _messages[key].Message.Length; ++i)
+                                var messageLength = new StringBuilder();
+                                for (var i = 0; i < _messages[key].Message.Length; ++i)
                                 {
                                     if (char.IsDigit(_messages[key].Message[i]))
                                     {
@@ -357,12 +358,12 @@ namespace MeshNetwork
             while (_pingThreadRunning)
             {
                 // Get a copy to avoid using a lock and causing a deadlock
-                foreach (NodeProperties node in GetNeighbors())
+                foreach (var node in GetNeighbors())
                 {
                     SendMessageInternal(node, MessageType.Ping, string.Empty);
                 }
 
-                Thread.Sleep(NetworkNode.PingFrequency * 1000);
+                Thread.Sleep(PingFrequency * 1000);
             }
         }
 
@@ -374,7 +375,7 @@ namespace MeshNetwork
             while (_recievedMessages.Count > 0)
             {
                 var messageObject = _recievedMessages.Dequeue();
-                Logger.Write("Message recieved, " + messageObject.Item1.ToString());
+                Logger.Write("Message recieved, " + messageObject.Item1);
                 switch (messageObject.Item1.Type)
                 {
                     case MessageType.Neighbors:
@@ -408,10 +409,10 @@ namespace MeshNetwork
             if (string.IsNullOrEmpty(data))
             {
                 // request for information
-                StringBuilder builder = new StringBuilder();
+                var builder = new StringBuilder();
                 foreach (var item in GetNeighbors())
                 {
-                    builder.Append(item.IP);
+                    builder.Append(item.IpAddress);
                     builder.Append(":");
                     builder.Append(item.Port);
                     builder.Append(";");
@@ -427,12 +428,8 @@ namespace MeshNetwork
             else
             {
                 // recieved information
-                string[] neighbors = data.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
-                List<NodeProperties> nodes = new List<NodeProperties>();
-                foreach (var item in neighbors)
-                {
-                    nodes.Add(new NodeProperties(item));
-                }
+                var neighbors = data.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+                var nodes = neighbors.Select(item => new NodeProperties(item)).ToList();
 
                 lock (_remoteNeighborsRetrieved)
                 {
@@ -459,11 +456,11 @@ namespace MeshNetwork
                     TcpClient client = null;
                     try
                     {
-                        Logger.Write("Attempting connection to " + sender.IP + ":" + sender.Port);
+                        Logger.Write("Attempting connection to " + sender.IpAddress + ":" + sender.Port);
                         client = new TcpClient();
-                        client.Connect(new IPEndPoint(sender.IP, sender.Port));
-                        _sendingConnections[sender] = new NetworkConnection() { Client = client, LastPingRecieved = DateTime.UtcNow };
-                        Logger.Write("Connection to " + sender.IP + ":" + sender.Port + " successful");
+                        client.Connect(new IPEndPoint(sender.IpAddress, sender.Port));
+                        _sendingConnections[sender] = new NetworkConnection { Client = client, LastPingRecieved = DateTime.UtcNow };
+                        Logger.Write("Connection to " + sender.IpAddress + ":" + sender.Port + " successful");
                     }
                     catch (Exception)
                     {
@@ -473,7 +470,7 @@ namespace MeshNetwork
                         }
                         _sendingConnections.Remove(sender);
                         _messages.Remove(sender);
-                        Logger.Write("Connection to " + sender.IP + ":" + sender.Port + " failed");
+                        Logger.Write("Connection to " + sender.IpAddress + ":" + sender.Port + " failed");
                     }
                 }
 
@@ -493,7 +490,7 @@ namespace MeshNetwork
         /// <returns>A value indicating whether the message was successfully sent.</returns>
         private bool SendMessageInternal(NodeProperties sendTo, MessageType type, string message)
         {
-            string composedMessage = Message.CreateMessage(_port, type, message);
+            var composedMessage = Message.CreateMessage(_port, type, message);
 
             if (string.IsNullOrEmpty(composedMessage))
             {
@@ -507,15 +504,15 @@ namespace MeshNetwork
                     TcpClient client = null;
                     try
                     {
-                        Logger.Write("Attempting connection to " + sendTo.IP + ":" + sendTo.Port);
+                        Logger.Write("Attempting connection to " + sendTo.IpAddress + ":" + sendTo.Port);
                         client = new TcpClient();
-                        client.Connect(sendTo.IP, sendTo.Port);
-                        _sendingConnections[sendTo] = new NetworkConnection() { Client = client, LastPingRecieved = DateTime.UtcNow };
-                        Logger.Write("Connection to " + sendTo.IP + ":" + sendTo.Port + " successful");
+                        client.Connect(sendTo.IpAddress, sendTo.Port);
+                        _sendingConnections[sendTo] = new NetworkConnection { Client = client, LastPingRecieved = DateTime.UtcNow };
+                        Logger.Write("Connection to " + sendTo.IpAddress + ":" + sendTo.Port + " successful");
                     }
                     catch
                     {
-                        Logger.Write("Connection to " + sendTo.IP + ":" + sendTo.Port + " failed");
+                        Logger.Write("Connection to " + sendTo.IpAddress + ":" + sendTo.Port + " failed");
                         if (client != null)
                         {
                             client.Close();
@@ -525,7 +522,7 @@ namespace MeshNetwork
                     }
                 }
 
-                byte[] buffer = Encoding.Default.GetBytes(composedMessage);
+                var buffer = Encoding.Default.GetBytes(composedMessage);
                 try
                 {
                     _sendingConnections[sendTo].Client.GetStream().Write(buffer, 0, buffer.Length);
