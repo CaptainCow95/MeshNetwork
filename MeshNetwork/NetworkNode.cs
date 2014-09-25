@@ -229,12 +229,9 @@ namespace MeshNetwork
             var ret = new List<NodeProperties>();
             lock (_lockObject)
             {
-                foreach (var node in _sendingConnections.Keys)
+                foreach (var node in _sendingConnections.Keys.Where(node => !ret.Contains(node)))
                 {
-                    if (!ret.Contains(node))
-                    {
-                        ret.Add(node);
-                    }
+                    ret.Add(node);
                 }
             }
 
