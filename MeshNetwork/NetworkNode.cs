@@ -25,11 +25,6 @@ namespace MeshNetwork
         internal const int PingFrequency = 10;
 
         /// <summary>
-        /// The object to lock on.
-        /// </summary>
-        private readonly object _lockObject = new object();
-
-        /// <summary>
         /// A dictionary of all the messages currently being recieved.
         /// </summary>
         private readonly Dictionary<NodeProperties, MessageBuilder> _messages = new Dictionary<NodeProperties, MessageBuilder>();
@@ -39,7 +34,10 @@ namespace MeshNetwork
         /// </summary>
         private readonly Queue<Tuple<InternalMessage, NodeProperties>> _recievedMessages = new Queue<Tuple<InternalMessage, NodeProperties>>();
 
+        private readonly object _recievingLockObject = new object();
         private readonly Dictionary<uint, Message> _responses = new Dictionary<uint, Message>();
+        private readonly object _responsesLockObject = new object();
+        private readonly object _sendingLockObject = new object();
         private bool _connected = false;
 
         /// <summary>
@@ -194,7 +192,7 @@ namespace MeshNetwork
         public List<NodeProperties> GetNeighbors()
         {
             var ret = new List<NodeProperties>();
-            lock (_lockObject)
+            lock (_sendingLockObject)
             {
                 foreach (var node in _sendingConnections.Keys.Where(node => !ret.Contains(node)))
                 {
@@ -265,7 +263,7 @@ namespace MeshNetwork
                 var incomingTcpClient = _connectionListener.AcceptTcpClient();
                 var ipEndPoint = (IPEndPoint)incomingTcpClient.Client.RemoteEndPoint;
                 var incomingNodeProperties = new NodeProperties(ipEndPoint.Address.MapToIPv4(), ipEndPoint.Port);
-                lock (_lockObject)
+                lock (_recievingLockObject)
                 {
                     _recievingConnections[incomingNodeProperties] = new NetworkConnection { Client = incomingTcpClient, LastPingRecieved = DateTime.UtcNow };
                 }
@@ -276,7 +274,7 @@ namespace MeshNetwork
         private async Task<NetworkConnection> GetClientOrConnect(NodeProperties connectTo)
         {
             bool reconnect;
-            lock (_lockObject)
+            lock (_sendingLockObject)
             {
                 reconnect = !_sendingConnections.ContainsKey(connectTo);
 
@@ -299,7 +297,7 @@ namespace MeshNetwork
                         Client = client,
                         LastPingRecieved = DateTime.UtcNow
                     };
-                    lock (_lockObject)
+                    lock (_sendingLockObject)
                     {
                         _sendingConnections[connectTo] = connection;
                     }
@@ -314,7 +312,7 @@ namespace MeshNetwork
                         client.Close();
                     }
 
-                    lock (_lockObject)
+                    lock (_sendingLockObject)
                     {
                         _sendingConnections.Remove(connectTo);
                     }
@@ -324,7 +322,7 @@ namespace MeshNetwork
             }
 
             bool waiting;
-            lock (_lockObject)
+            lock (_sendingLockObject)
             {
                 waiting = _sendingConnections[connectTo] == null;
             }
@@ -332,13 +330,13 @@ namespace MeshNetwork
             while (waiting)
             {
                 await Task.Delay(1).ConfigureAwait(false);
-                lock (_lockObject)
+                lock (_sendingLockObject)
                 {
                     waiting = _sendingConnections.ContainsKey(connectTo) && _sendingConnections[connectTo] == null;
                 }
             }
 
-            lock (_lockObject)
+            lock (_sendingLockObject)
             {
                 return !_sendingConnections.ContainsKey(connectTo) ? null : _sendingConnections[connectTo];
             }
@@ -351,7 +349,7 @@ namespace MeshNetwork
         {
             while (_messageListenerThreadRunning)
             {
-                lock (_lockObject)
+                lock (_recievingLockObject)
                 {
                     foreach (var key in _recievingConnections.Keys)
                     {
@@ -517,9 +515,13 @@ namespace MeshNetwork
             {
                 Logger.Write("Message sending failed");
                 connection.Client.Close();
-                lock (_lockObject)
+                lock (_sendingLockObject)
                 {
                     _sendingConnections.Remove(sendTo);
+                }
+
+                lock (_recievingLockObject)
+                {
                     _messages.Remove(sendTo);
                 }
                 return false;
@@ -531,18 +533,24 @@ namespace MeshNetwork
         private async Task<Response> SendMessageResponseInternal(NodeProperties sendTo, MessageType type, string message)
         {
             uint id = (uint)Interlocked.Increment(ref _messageIdCounter);
-            _responses[id] = null;
+            lock (_responsesLockObject)
+            {
+                _responses[id] = null;
+            }
             var composedMessage = InternalMessage.CreateMessage(_port, type, message, true, id);
             bool sendMessageResult = await SendMessageLowLevel(sendTo, composedMessage).ConfigureAwait(false);
 
             if (!sendMessageResult)
             {
-                _responses.Remove(id);
+                lock (_responsesLockObject)
+                {
+                    _responses.Remove(id);
+                }
                 return new Response(false, null);
             }
 
             bool wait;
-            lock (_lockObject)
+            lock (_responsesLockObject)
             {
                 wait = _responses[id] == null;
             }
@@ -550,14 +558,18 @@ namespace MeshNetwork
             while (wait)
             {
                 await Task.Delay(1).ConfigureAwait(false);
-                lock (_lockObject)
+                lock (_responsesLockObject)
                 {
                     wait = _responses[id] == null;
                 }
             }
 
-            Message response = _responses[id];
-            _responses.Remove(id);
+            Message response;
+            lock (_responsesLockObject)
+            {
+                response = _responses[id];
+                _responses.Remove(id);
+            }
             return new Response(true, response);
         }
 
