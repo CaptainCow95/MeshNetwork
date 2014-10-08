@@ -98,10 +98,14 @@ namespace MeshNetwork
                     return null;
             }
 
-            string responseString = "f";
+            string responseString;
             if (waitForResponse)
             {
                 responseString = "t" + messageId;
+            }
+            else
+            {
+                responseString = "f" + messageId;
             }
 
             string portString = sendingPort + ":";
@@ -165,6 +169,8 @@ namespace MeshNetwork
 
                 ++index;
             } while (index < rawMessage.Length);
+
+            ++index;
 
             uint messageId = 0;
             do

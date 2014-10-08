@@ -191,16 +191,10 @@ namespace MeshNetwork
         /// <returns>The nodes that this node is connected to.</returns>
         public List<NodeProperties> GetNeighbors()
         {
-            var ret = new List<NodeProperties>();
             lock (_sendingLockObject)
             {
-                foreach (var node in _sendingConnections.Keys.Where(node => !ret.Contains(node)))
-                {
-                    ret.Add(node);
-                }
+                return _sendingConnections.Keys.Where(e => _sendingConnections[e] != null).ToList();
             }
-
-            return ret;
         }
 
         /// <summary>
@@ -424,7 +418,7 @@ namespace MeshNetwork
                 var messageObject = _recievedMessages.Dequeue();
                 var message = new Message(messageObject.Item1.Sender, messageObject.Item1.Data,
                                 messageObject.Item1.MessageId.GetValueOrDefault(),
-                                messageObject.Item1.WaitingForResponse, false);
+                                messageObject.Item1.WaitingForResponse, messageObject.Item1.MessageId.HasValue);
                 Logger.Write("Message recieved, " + messageObject.Item1);
                 switch (messageObject.Item1.Type)
                 {
@@ -469,6 +463,13 @@ namespace MeshNetwork
                 }
 
                 await SendResponseInternal(message, MessageType.Neighbors, builder.ToString()).ConfigureAwait(false);
+            }
+            else if (message.InResponseToMessage)
+            {
+                lock (_responsesLockObject)
+                {
+                    _responses[message.MessageId] = message;
+                }
             }
         }
 
