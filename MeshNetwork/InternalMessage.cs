@@ -13,6 +13,9 @@ namespace MeshNetwork
         /// </summary>
         private string _data;
 
+        /// <summary>
+        /// The id belonging to this message.
+        /// </summary>
         private uint? _messageId;
 
         /// <summary>
@@ -25,10 +28,13 @@ namespace MeshNetwork
         /// </summary>
         private MessageType _type;
 
+        /// <summary>
+        /// A value indicating whether the sender is waiting for a response to this message.
+        /// </summary>
         private bool _waitingForResponse;
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="InternalMessage" /> class.
+        /// Prevents a default instance of the <see cref="InternalMessage" /> class from being created.
         /// </summary>
         private InternalMessage()
         {
@@ -42,6 +48,9 @@ namespace MeshNetwork
             get { return _data; }
         }
 
+        /// <summary>
+        /// Gets the id of this message.
+        /// </summary>
         public uint? MessageId
         {
             get { return _messageId; }
@@ -63,6 +72,9 @@ namespace MeshNetwork
             get { return _type; }
         }
 
+        /// <summary>
+        /// Gets a value indicating whether the sender is waiting for a response to this message.
+        /// </summary>
         public bool WaitingForResponse
         {
             get { return _waitingForResponse; }
@@ -76,7 +88,7 @@ namespace MeshNetwork
         /// <param name="data">The data to go along with the message.</param>
         /// <param name="waitForResponse">Whether this message is waiting for a response.</param>
         /// <param name="messageId">The id of the message if it has one.</param>
-        /// <returns>The compoosed message to be sent over the wire to the recieving node.</returns>
+        /// <returns>The composed message to be sent over the wire to the receiving node.</returns>
         public static string CreateMessage(int sendingPort, MessageType type, string data, bool waitForResponse = false, uint? messageId = null)
         {
             char typeChar;
@@ -139,16 +151,17 @@ namespace MeshNetwork
         }
 
         /// <summary>
-        /// Creates a message object from a message that was recieved from another node.
+        /// Creates a message object from a message that was received from another node.
         /// </summary>
-        /// <param name="rawMessage">The raw message as it was recieved.</param>
+        /// <param name="rawMessage">The raw message as it was received.</param>
         /// <param name="sender">The sender of the message.</param>
+        /// <returns>An <see cref="InternalMessage" /> object the represents the received message.</returns>
         public static InternalMessage Parse(string rawMessage, NodeProperties sender)
         {
             var message = new InternalMessage();
 
             int index = 0;
-            do
+            while (index < rawMessage.Length)
             {
                 if (!char.IsDigit(rawMessage[index]))
                 {
@@ -168,12 +181,12 @@ namespace MeshNetwork
                 }
 
                 ++index;
-            } while (index < rawMessage.Length);
+            }
 
             ++index;
 
             uint messageId = 0;
-            do
+            while (index < rawMessage.Length)
             {
                 if (!char.IsDigit(rawMessage[index]))
                 {
@@ -184,9 +197,9 @@ namespace MeshNetwork
                 messageId *= 10;
                 messageId += (uint)char.GetNumericValue(rawMessage[index]);
                 ++index;
-            } while (index < rawMessage.Length);
+            }
 
-            do
+            while (index < rawMessage.Length)
             {
                 if (!char.IsDigit(rawMessage[index]))
                 {
@@ -213,12 +226,12 @@ namespace MeshNetwork
                 }
 
                 ++index;
-            } while (index < rawMessage.Length);
+            }
 
             ++index;
 
             int senderPort = 0;
-            do
+            while (index < rawMessage.Length)
             {
                 if (!char.IsDigit(rawMessage[index]))
                 {
@@ -230,7 +243,7 @@ namespace MeshNetwork
                 senderPort *= 10;
                 senderPort += (int)char.GetNumericValue(rawMessage[index]);
                 ++index;
-            } while (index < rawMessage.Length);
+            }
 
             return message;
         }

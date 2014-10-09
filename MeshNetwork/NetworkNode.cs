@@ -17,27 +17,46 @@ namespace MeshNetwork
         /// <summary>
         /// The number of seconds between pings before a client is considered disconnected.
         /// </summary>
-        internal const int ConnectionTimeout = 20;
+        internal const int ConnectionTimeout = PingFrequency * 2;
 
         /// <summary>
         /// The number of seconds between pings.
         /// </summary>
-        internal const int PingFrequency = 10;
+        private const int PingFrequency = 10;
 
         /// <summary>
-        /// A dictionary of all the messages currently being recieved.
+        /// A dictionary of all the messages currently being received.
         /// </summary>
         private readonly Dictionary<NodeProperties, MessageBuilder> _messages = new Dictionary<NodeProperties, MessageBuilder>();
 
         /// <summary>
-        /// A queue of the recieved full messages.
+        /// A queue of the received full messages.
         /// </summary>
-        private readonly Queue<Tuple<InternalMessage, NodeProperties>> _recievedMessages = new Queue<Tuple<InternalMessage, NodeProperties>>();
+        private readonly Queue<Tuple<InternalMessage, NodeProperties>> _receivedMessages = new Queue<Tuple<InternalMessage, NodeProperties>>();
 
-        private readonly object _recievingLockObject = new object();
+        /// <summary>
+        /// The object to lock on for message receiving constructs.
+        /// </summary>
+        private readonly object _receivingLockObject = new object();
+
+        /// <summary>
+        /// A dictionary of the message ids and their corresponding response objects.
+        /// </summary>
         private readonly Dictionary<uint, Message> _responses = new Dictionary<uint, Message>();
+
+        /// <summary>
+        /// The object to lock on for message response constructs.
+        /// </summary>
         private readonly object _responsesLockObject = new object();
+
+        /// <summary>
+        /// The object to lock on for message sending constructs.
+        /// </summary>
         private readonly object _sendingLockObject = new object();
+
+        /// <summary>
+        /// Whether this node is connected to a network.
+        /// </summary>
         private bool _connected = false;
 
         /// <summary>
@@ -55,6 +74,9 @@ namespace MeshNetwork
         /// </summary>
         private bool _connectionListenerThreadRunning;
 
+        /// <summary>
+        /// The current message id of this node.
+        /// </summary>
         private int _messageIdCounter;
 
         /// <summary>
@@ -83,9 +105,9 @@ namespace MeshNetwork
         private int _port;
 
         /// <summary>
-        /// A dictionary of the connections this node is recieving messages on.
+        /// A dictionary of the connections this node is receiving messages on.
         /// </summary>
-        private volatile Dictionary<NodeProperties, NetworkConnection> _recievingConnections = new Dictionary<NodeProperties, NetworkConnection>();
+        private volatile Dictionary<NodeProperties, NetworkConnection> _receivingConnections = new Dictionary<NodeProperties, NetworkConnection>();
 
         /// <summary>
         /// A dictionary of the connections this node is sending messages on.
@@ -110,22 +132,34 @@ namespace MeshNetwork
         }
 
         /// <summary>
-        /// The event handler used when a message is recieved.
+        /// The event handler used when a message is received.
         /// </summary>
         /// <param name="source">This object.</param>
-        /// <param name="args">The message that was recieved.</param>
-        public delegate void RecievedMessageEventHandler(object source, RecievedMessageEventArgs args);
+        /// <param name="args">The message that was received.</param>
+        public delegate void ReceivedMessageEventHandler(object source, ReceivedMessageEventArgs args);
 
         /// <summary>
-        /// The event to subscribe to in order to recieve messages.
+        /// The event to subscribe to in order to receive messages.
         /// </summary>
-        public event RecievedMessageEventHandler RecievedMessage;
+        public event ReceivedMessageEventHandler ReceivedMessage;
+
+        /// <summary>
+        /// Gets a value indicating whether this node is connected to a network.
+        /// </summary>
+        public bool IsConnectedToNetwork
+        {
+            get
+            {
+                return _connected;
+            }
+        }
 
         /// <summary>
         /// Connects this node to a network.
         /// </summary>
         /// <param name="listeningPort">The port to listen on.</param>
         /// <param name="initialNodes">The nodes to try to connect to.</param>
+        /// <returns>A task to await on.</returns>
         public async Task ConnectToNetworkAsync(int listeningPort, IEnumerable<NodeProperties> initialNodes)
         {
             _connected = false;
@@ -147,7 +181,7 @@ namespace MeshNetwork
             foreach (var neighbor in initialNodes)
             {
                 Logger.Write("Attempting connection to " + neighbor.IpAddress + ":" + neighbor.Port);
-                NetworkConnection connection = await GetClientOrConnect(neighbor).ConfigureAwait(false);
+                NetworkConnection connection = await GetNetworkConnection(neighbor).ConfigureAwait(false);
                 if (connection != null)
                 {
                     connected = true;
@@ -160,7 +194,7 @@ namespace MeshNetwork
                 foreach (var neighbor in await GetRemoteNeighborsAsync(GetNeighbors()[0]).ConfigureAwait(false))
                 {
                     Logger.Write("Attempting connection to " + neighbor.IpAddress + ":" + neighbor.Port);
-                    await GetClientOrConnect(neighbor).ConfigureAwait(false);
+                    await GetNetworkConnection(neighbor).ConfigureAwait(false);
                 }
             }
 
@@ -214,16 +248,11 @@ namespace MeshNetwork
                 return null;
             }
 
-            // recieved information
+            // received information
             var neighbors = response.ResponseMessage.Data.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
             var nodes = neighbors.Select(item => new NodeProperties(item)).ToList();
 
             return nodes;
-        }
-
-        public bool IsConnectedToNetwork()
-        {
-            return _connected;
         }
 
         /// <summary>
@@ -237,11 +266,26 @@ namespace MeshNetwork
             return await SendMessageInternal(sendTo, MessageType.User, message).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Sends a message to another node and awaits a response.
+        /// </summary>
+        /// <param name="sendTo">The node to send the message to.</param>
+        /// <param name="message">The message to send.</param>
+        /// <returns>
+        /// A response object that contains whether the message was successfully sent and the
+        /// response from the receiver.
+        /// </returns>
         public async Task<Response> SendMessageResponseAsync(NodeProperties sendTo, string message)
         {
             return await SendMessageResponseInternal(sendTo, MessageType.User, message).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Sends a message response.
+        /// </summary>
+        /// <param name="responseTo">The message that is being responded to.</param>
+        /// <param name="message">The message to send.</param>
+        /// <returns>A value indicating whether the message was successfully sent.</returns>
         public async Task<bool> SendResponseAsync(Message responseTo, string message)
         {
             return await SendResponseInternal(responseTo, MessageType.User, message).ConfigureAwait(false);
@@ -257,15 +301,23 @@ namespace MeshNetwork
                 var incomingTcpClient = _connectionListener.AcceptTcpClient();
                 var ipEndPoint = (IPEndPoint)incomingTcpClient.Client.RemoteEndPoint;
                 var incomingNodeProperties = new NodeProperties(ipEndPoint.Address.MapToIPv4(), ipEndPoint.Port);
-                lock (_recievingLockObject)
+                lock (_receivingLockObject)
                 {
-                    _recievingConnections[incomingNodeProperties] = new NetworkConnection { Client = incomingTcpClient, LastPingRecieved = DateTime.UtcNow };
+                    _receivingConnections[incomingNodeProperties] = new NetworkConnection { Client = incomingTcpClient, LastPingReceived = DateTime.UtcNow };
                 }
-                Logger.Write("Connection recieved from " + incomingNodeProperties.IpAddress + ":" + incomingNodeProperties.Port);
+
+                Logger.Write("Connection received from " + incomingNodeProperties.IpAddress + ":" + incomingNodeProperties.Port);
             }
         }
 
-        private async Task<NetworkConnection> GetClientOrConnect(NodeProperties connectTo)
+        /// <summary>
+        /// Gets a network connection to the specified node, creating the connection if need be.
+        /// </summary>
+        /// <param name="connectTo">The node to connect to.</param>
+        /// <returns>
+        /// The network connection associated with that node, or null if it could not be created.
+        /// </returns>
+        private async Task<NetworkConnection> GetNetworkConnection(NodeProperties connectTo)
         {
             bool reconnect;
             lock (_sendingLockObject)
@@ -289,12 +341,13 @@ namespace MeshNetwork
                     NetworkConnection connection = new NetworkConnection
                     {
                         Client = client,
-                        LastPingRecieved = DateTime.UtcNow
+                        LastPingReceived = DateTime.UtcNow
                     };
                     lock (_sendingLockObject)
                     {
                         _sendingConnections[connectTo] = connection;
                     }
+
                     Logger.Write("Connection to " + connectTo.IpAddress + ":" + connectTo.Port + " successful");
                     return connection;
                 }
@@ -343,20 +396,20 @@ namespace MeshNetwork
         {
             while (_messageListenerThreadRunning)
             {
-                lock (_recievingLockObject)
+                lock (_receivingLockObject)
                 {
-                    foreach (var key in _recievingConnections.Keys)
+                    foreach (var key in _receivingConnections.Keys)
                     {
                         if (!_messages.ContainsKey(key))
                         {
                             _messages[key] = new MessageBuilder();
                         }
 
-                        var availableBytes = _recievingConnections[key].Client.Available;
+                        var availableBytes = _receivingConnections[key].Client.Available;
                         if (availableBytes > 0)
                         {
                             var buffer = new byte[availableBytes];
-                            _recievingConnections[key].Client.GetStream().Read(buffer, 0, availableBytes);
+                            _receivingConnections[key].Client.GetStream().Read(buffer, 0, availableBytes);
                             _messages[key].Message.Append(Encoding.Default.GetString(buffer));
 
                             if (_messages[key].Length == -1 && _messages[key].Message.Length > 0)
@@ -378,7 +431,7 @@ namespace MeshNetwork
 
                             if (_messages[key].Length != -1 && _messages[key].Message.Length >= _messages[key].Length)
                             {
-                                _recievedMessages.Enqueue(new Tuple<InternalMessage, NodeProperties>(InternalMessage.Parse(_messages[key].Message.ToString(0, _messages[key].Length), key), key));
+                                _receivedMessages.Enqueue(new Tuple<InternalMessage, NodeProperties>(InternalMessage.Parse(_messages[key].Message.ToString(0, _messages[key].Length), key), key));
                                 _messages[key].Message.Remove(0, _messages[key].Length);
                             }
                         }
@@ -409,32 +462,37 @@ namespace MeshNetwork
         }
 
         /// <summary>
-        /// Processes all recieved messages.
+        /// Processes all received messages.
         /// </summary>
+        /// <returns>A task to await on.</returns>
         private async Task ProcessMessages()
         {
-            while (_recievedMessages.Count > 0)
+            while (_receivedMessages.Count > 0)
             {
-                var messageObject = _recievedMessages.Dequeue();
-                var message = new Message(messageObject.Item1.Sender, messageObject.Item1.Data,
-                                messageObject.Item1.MessageId.GetValueOrDefault(),
-                                messageObject.Item1.WaitingForResponse, messageObject.Item1.MessageId.HasValue);
-                Logger.Write("Message recieved, " + messageObject.Item1);
+                var messageObject = _receivedMessages.Dequeue();
+                var message = new Message(
+                                        messageObject.Item1.Sender,
+                                        messageObject.Item1.Data,
+                                        messageObject.Item1.MessageId.GetValueOrDefault(),
+                                        messageObject.Item1.WaitingForResponse,
+                                        messageObject.Item1.MessageId.HasValue);
+                Logger.Write("Message received, " + messageObject.Item1);
                 switch (messageObject.Item1.Type)
                 {
                     case MessageType.Neighbors:
-                        await RecievedNeighborsMessage(message).ConfigureAwait(false);
+                        await this.ReceivedNeighborsMessage(message).ConfigureAwait(false);
                         break;
 
                     case MessageType.Ping:
-                        await RecievedPing(message).ConfigureAwait(false);
+                        await this.ReceivedPing(message).ConfigureAwait(false);
                         break;
 
                     case MessageType.User:
-                        if (RecievedMessage != null)
+                        if (this.ReceivedMessage != null)
                         {
-                            RecievedMessage(this, new RecievedMessageEventArgs(message));
+                            this.ReceivedMessage(this, new ReceivedMessageEventArgs(message));
                         }
+
                         break;
 
                     case MessageType.Unknown:
@@ -443,7 +501,12 @@ namespace MeshNetwork
             }
         }
 
-        private async Task RecievedNeighborsMessage(Message message)
+        /// <summary>
+        /// Called when a neighbor message is received.
+        /// </summary>
+        /// <param name="message">The message received.</param>
+        /// <returns>A task to await on.</returns>
+        private async Task ReceivedNeighborsMessage(Message message)
         {
             if (message.AwaitingResponse)
             {
@@ -473,16 +536,24 @@ namespace MeshNetwork
             }
         }
 
-        private async Task RecievedPing(Message message)
+        /// <summary>
+        /// Called when a ping message is received.
+        /// </summary>
+        /// <param name="message">The message received.</param>
+        /// <returns>A task to await on.</returns>
+        private async Task ReceivedPing(Message message)
         {
-            NetworkConnection connection = await GetClientOrConnect(message.Sender).ConfigureAwait(false);
-            connection.LastPingRecieved = DateTime.UtcNow;
+            NetworkConnection connection = await GetNetworkConnection(message.Sender).ConfigureAwait(false);
+            if (connection != null)
+            {
+                connection.LastPingReceived = DateTime.UtcNow;
+            }
         }
 
         /// <summary>
-        /// Creates the message to send it to a node.
+        /// Sends a message to a node.
         /// </summary>
-        /// <param name="sendTo">The node to send it to.</param>
+        /// <param name="sendTo">The node to send the message to.</param>
         /// <param name="type">The type of message to send.</param>
         /// <param name="message">The message to send.</param>
         /// <returns>A value indicating whether the message was successfully sent.</returns>
@@ -493,6 +564,12 @@ namespace MeshNetwork
             return await SendMessageLowLevel(sendTo, composedMessage).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Sends a composed message to a node.
+        /// </summary>
+        /// <param name="sendTo">The node to send the message to.</param>
+        /// <param name="composedMessage">The composed message to send.</param>
+        /// <returns>A value indicating whether the message was successfully sent.</returns>
         private async Task<bool> SendMessageLowLevel(NodeProperties sendTo, string composedMessage)
         {
             if (string.IsNullOrEmpty(composedMessage))
@@ -500,7 +577,7 @@ namespace MeshNetwork
                 return false;
             }
 
-            var connection = await GetClientOrConnect(sendTo).ConfigureAwait(false);
+            var connection = await GetNetworkConnection(sendTo).ConfigureAwait(false);
             if (connection == null)
             {
                 return false;
@@ -521,16 +598,24 @@ namespace MeshNetwork
                     _sendingConnections.Remove(sendTo);
                 }
 
-                lock (_recievingLockObject)
+                lock (_receivingLockObject)
                 {
                     _messages.Remove(sendTo);
                 }
+
                 return false;
             }
 
             return true;
         }
 
+        /// <summary>
+        /// Sends a message to a node and awaits a response.
+        /// </summary>
+        /// <param name="sendTo">The node to send the message to.</param>
+        /// <param name="type">The type of message to send.</param>
+        /// <param name="message">The message to send.</param>
+        /// <returns>A value indicating whether the message was successfully sent.</returns>
         private async Task<Response> SendMessageResponseInternal(NodeProperties sendTo, MessageType type, string message)
         {
             uint id = (uint)Interlocked.Increment(ref _messageIdCounter);
@@ -538,6 +623,7 @@ namespace MeshNetwork
             {
                 _responses[id] = null;
             }
+
             var composedMessage = InternalMessage.CreateMessage(_port, type, message, true, id);
             bool sendMessageResult = await SendMessageLowLevel(sendTo, composedMessage).ConfigureAwait(false);
 
@@ -547,6 +633,7 @@ namespace MeshNetwork
                 {
                     _responses.Remove(id);
                 }
+
                 return new Response(false, null);
             }
 
@@ -571,9 +658,17 @@ namespace MeshNetwork
                 response = _responses[id];
                 _responses.Remove(id);
             }
+
             return new Response(true, response);
         }
 
+        /// <summary>
+        /// Sends a response message to a node.
+        /// </summary>
+        /// <param name="responseTo">The message that this message is in response to.</param>
+        /// <param name="type">The type of message to send.</param>
+        /// <param name="message">The message to send.</param>
+        /// <returns>A value indicating whether the message was successfully sent.</returns>
         private async Task<bool> SendResponseInternal(Message responseTo, MessageType type, string message)
         {
             var composedMessage = InternalMessage.CreateMessage(_port, type, message, false, responseTo.MessageId);

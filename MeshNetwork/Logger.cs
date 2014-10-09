@@ -33,13 +33,16 @@ namespace MeshNetwork
         /// <param name="message">The message to write.</param>
         public static void Write(string message)
         {
-            if (string.IsNullOrEmpty(_filename)) return;
+            if (string.IsNullOrEmpty(_filename))
+            {
+                return;
+            }
 
             lock (LockObject)
             {
                 using (var file = new StreamWriter(_filename, true))
                 {
-                    file.WriteLine(String.Concat(DateTime.UtcNow.ToString("M/d/yyyy HH:mm:ss"), ": ", message));
+                    file.WriteLine(string.Concat(DateTime.UtcNow.ToString("M/d/yyyy HH:mm:ss"), ": ", message));
                 }
             }
         }

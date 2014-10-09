@@ -3,12 +3,12 @@
 namespace MeshNetwork
 {
     /// <summary>
-    /// An object that is used to help build up messages as they are recieved.
+    /// An object that is used to help build up messages as they are received.
     /// </summary>
     internal class MessageBuilder
     {
         /// <summary>
-        /// The current contents of the message that have been recieved.
+        /// The current contents of the message that have been received.
         /// </summary>
         private readonly StringBuilder _message = new StringBuilder();
 

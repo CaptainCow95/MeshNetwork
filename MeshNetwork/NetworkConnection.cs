@@ -16,7 +16,7 @@ namespace MeshNetwork
         /// <summary>
         /// The last time the other member sent a ping.
         /// </summary>
-        private DateTime _lastPingRecieved;
+        private DateTime _lastPingReceived;
 
         /// <summary>
         /// Gets or sets the client used to talk to the other member.
@@ -28,17 +28,24 @@ namespace MeshNetwork
         }
 
         /// <summary>
-        /// Gets whether this client is still connected or not.
+        /// Gets a value indicating whether this client is still connected or not.
         /// </summary>
-        public bool Connected { get { return _client.Connected && DateTime.UtcNow.Subtract(_lastPingRecieved).TotalSeconds > NetworkNode.ConnectionTimeout; } }
+        public bool Connected
+        {
+            get
+            {
+                return _client.Connected
+                       && DateTime.UtcNow.Subtract(_lastPingReceived).TotalSeconds > NetworkNode.ConnectionTimeout;
+            }
+        }
 
         /// <summary>
         /// Gets or sets the last time the other member sent a ping.
         /// </summary>
-        public DateTime LastPingRecieved
+        public DateTime LastPingReceived
         {
-            get { return _lastPingRecieved; }
-            set { _lastPingRecieved = value; }
+            get { return _lastPingReceived; }
+            set { _lastPingReceived = value; }
         }
     }
 }
