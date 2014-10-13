@@ -28,18 +28,6 @@ namespace MeshNetwork
         }
 
         /// <summary>
-        /// Gets a value indicating whether this client is still connected or not.
-        /// </summary>
-        public bool Connected
-        {
-            get
-            {
-                return _client.Connected
-                       && DateTime.UtcNow.Subtract(_lastPingReceived).TotalSeconds > NetworkNode.ConnectionTimeout;
-            }
-        }
-
-        /// <summary>
         /// Gets or sets the last time the other member sent a ping.
         /// </summary>
         public DateTime LastPingReceived

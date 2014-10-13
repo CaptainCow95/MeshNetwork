@@ -15,16 +15,6 @@ namespace MeshNetwork
     public class NetworkNode
     {
         /// <summary>
-        /// The number of seconds between pings before a client is considered disconnected.
-        /// </summary>
-        internal const int ConnectionTimeout = PingFrequency * 2;
-
-        /// <summary>
-        /// The number of seconds between pings.
-        /// </summary>
-        private const int PingFrequency = 10;
-
-        /// <summary>
         /// The <see cref="Logger" /> object that this node logs to.
         /// </summary>
         private readonly Logger _logger;
@@ -90,6 +80,11 @@ namespace MeshNetwork
         private Thread _messageListenerThread;
 
         /// <summary>
+        /// The number of seconds between pings.
+        /// </summary>
+        private int _pingFrequency = 10;
+
+        /// <summary>
         /// The thread sending out pings.
         /// </summary>
         private Thread _pingThread;
@@ -103,6 +98,11 @@ namespace MeshNetwork
         /// A dictionary of the connections this node is receiving messages on.
         /// </summary>
         private volatile Dictionary<NodeProperties, NetworkConnection> _receivingConnections = new Dictionary<NodeProperties, NetworkConnection>();
+
+        /// <summary>
+        /// The number of seconds between reconnect attempts.
+        /// </summary>
+        private int _reconnectionFrequency = 30;
 
         /// <summary>
         /// A thread to manage trying to reconnect to various nodes.
@@ -168,6 +168,38 @@ namespace MeshNetwork
             get
             {
                 return _logger;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets the number of seconds between pings.
+        /// </summary>
+        public int PingFrequency
+        {
+            get
+            {
+                return _pingFrequency;
+            }
+
+            set
+            {
+                _pingFrequency = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets the number of seconds between reconnect attempts.
+        /// </summary>
+        public int ReconnectionFrequency
+        {
+            get
+            {
+                return _reconnectionFrequency;
+            }
+
+            set
+            {
+                _reconnectionFrequency = value;
             }
         }
 
@@ -485,7 +517,7 @@ namespace MeshNetwork
                     await SendMessageInternal(node, MessageType.Ping, string.Empty).ConfigureAwait(false);
                 }
 
-                await Task.Delay(PingFrequency * 1000).ConfigureAwait(false);
+                await Task.Delay(this._pingFrequency * 1000).ConfigureAwait(false);
             }
         }
 
@@ -583,7 +615,7 @@ namespace MeshNetwork
         /// </summary>
         private async void ReconnectionThreadRun()
         {
-            await Task.Delay(20 * 1000).ConfigureAwait(false);
+            await Task.Delay(_reconnectionFrequency * 500).ConfigureAwait(false);
             while (_childThreadsRunning)
             {
                 bool reconnected = true;
@@ -652,7 +684,7 @@ namespace MeshNetwork
                     }
                 }
 
-                await Task.Delay(PingFrequency * 3 * 1000).ConfigureAwait(false);
+                await Task.Delay(this._reconnectionFrequency * 1000).ConfigureAwait(false);
             }
         }
 
