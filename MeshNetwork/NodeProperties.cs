@@ -102,6 +102,25 @@ namespace MeshNetwork
         }
 
         /// <summary>
+        /// Checks if this node represents the current node.
+        /// </summary>
+        /// <param name="port">The port the current node is running on.</param>
+        /// <returns>True if this node represents the current node, otherwise false.</returns>
+        public bool IsSelf(int port)
+        {
+            IPAddress[] hosts = Dns.GetHostAddresses(_ipAddress.ToString());
+            IPAddress[] locals = Dns.GetHostAddresses(Dns.GetHostName());
+
+            return hosts.Any(host => IPAddress.IsLoopback(host) || locals.Contains(host)) && _port == port;
+        }
+
+        /// <inheritdoc></inheritdoc>
+        public override string ToString()
+        {
+            return _ipAddress.ToString() + ':' + this._port;
+        }
+
+        /// <summary>
         /// Gets the IP address associated with the specified hostname.
         /// </summary>
         /// <param name="hostname">The hostname to lookup the IP address of.</param>

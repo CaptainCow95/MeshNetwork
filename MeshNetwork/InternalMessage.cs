@@ -19,6 +19,11 @@ namespace MeshNetwork
         private uint? _messageId;
 
         /// <summary>
+        /// The raw, unparsed message.
+        /// </summary>
+        private string _rawMessage;
+
+        /// <summary>
         /// The sender of the message.
         /// </summary>
         private NodeProperties _sender;
@@ -34,10 +39,116 @@ namespace MeshNetwork
         private bool _waitingForResponse;
 
         /// <summary>
-        /// Prevents a default instance of the <see cref="InternalMessage" /> class from being created.
+        /// Initializes a new instance of the <see cref="InternalMessage" /> class.
         /// </summary>
-        private InternalMessage()
+        /// <param name="sender">The sender of the message.</param>
+        /// <param name="type">The type of message.</param>
+        /// <param name="data">The data to go along with the message.</param>
+        /// <param name="waitingForResponse">Whether this message is waiting for a response.</param>
+        /// <param name="messageId">The id of the message if it has one.</param>
+        /// <returns>The composed message to be sent over the wire to the receiving node.</returns>
+        public InternalMessage(NodeProperties sender, MessageType type, string data, bool waitingForResponse = false, uint? messageId = null)
         {
+            _type = type;
+            _sender = sender;
+            _data = data;
+            _waitingForResponse = waitingForResponse;
+            _messageId = messageId;
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="InternalMessage" /> class.
+        /// </summary>
+        /// <param name="rawMessage">The message that will be parsed.</param>
+        /// <param name="sender">The sender of the message.</param>
+        public InternalMessage(string rawMessage, NodeProperties sender)
+        {
+            _rawMessage = rawMessage;
+
+            int index = 0;
+            while (index < rawMessage.Length)
+            {
+                if (!char.IsDigit(rawMessage[index]))
+                {
+                    switch (rawMessage[index])
+                    {
+                        case 'f':
+                            _waitingForResponse = false;
+                            _messageId = 0;
+                            break;
+
+                        case 't':
+                            _waitingForResponse = true;
+                            break;
+                    }
+
+                    break;
+                }
+
+                ++index;
+            }
+
+            ++index;
+
+            uint messageId = 0;
+            while (index < rawMessage.Length)
+            {
+                if (!char.IsDigit(rawMessage[index]))
+                {
+                    _messageId = messageId;
+                    break;
+                }
+
+                messageId *= 10;
+                messageId += (uint)char.GetNumericValue(rawMessage[index]);
+                ++index;
+            }
+
+            while (index < rawMessage.Length)
+            {
+                if (!char.IsDigit(rawMessage[index]))
+                {
+                    switch (rawMessage[index])
+                    {
+                        case 'n':
+                            _type = MessageType.Neighbors;
+                            break;
+
+                        case 'p':
+                            _type = MessageType.Ping;
+                            break;
+
+                        case 'u':
+                            _type = MessageType.User;
+                            break;
+
+                        default:
+                            _type = MessageType.Unknown;
+                            break;
+                    }
+
+                    break;
+                }
+
+                ++index;
+            }
+
+            ++index;
+
+            int senderPort = 0;
+            while (index < rawMessage.Length)
+            {
+                if (!char.IsDigit(rawMessage[index]))
+                {
+                    _sender = new NodeProperties(sender.IpAddress, senderPort);
+                    _data = rawMessage.Substring(index + 1, rawMessage.Length - (index + 1));
+                    break;
+                }
+
+                senderPort *= 10;
+                senderPort += (int)char.GetNumericValue(rawMessage[index]);
+                ++index;
+            }
         }
 
         /// <summary>
@@ -54,6 +165,23 @@ namespace MeshNetwork
         public uint? MessageId
         {
             get { return _messageId; }
+        }
+
+        /// <summary>
+        /// Gets the raw, unparsed message.
+        /// </summary>
+        public string RawMessage
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(_rawMessage))
+                {
+                    // Updates the field in the method.
+                    GetNetworkString();
+                }
+
+                return _rawMessage;
+            }
         }
 
         /// <summary>
@@ -81,18 +209,13 @@ namespace MeshNetwork
         }
 
         /// <summary>
-        /// Creates a message from the various parts.
+        /// Gets this message as a string that can be sent over the wire.
         /// </summary>
-        /// <param name="sendingPort">The port the message is being sent from.</param>
-        /// <param name="type">The type of message.</param>
-        /// <param name="data">The data to go along with the message.</param>
-        /// <param name="waitForResponse">Whether this message is waiting for a response.</param>
-        /// <param name="messageId">The id of the message if it has one.</param>
-        /// <returns>The composed message to be sent over the wire to the receiving node.</returns>
-        public static string CreateMessage(int sendingPort, MessageType type, string data, bool waitForResponse = false, uint? messageId = null)
+        /// <returns>This message as a string that can be sent over the wire.</returns>
+        public string GetNetworkString()
         {
             char typeChar;
-            switch (type)
+            switch (_type)
             {
                 case MessageType.Neighbors:
                     typeChar = 'n';
@@ -111,18 +234,18 @@ namespace MeshNetwork
             }
 
             string responseString;
-            if (waitForResponse)
+            if (_waitingForResponse)
             {
-                responseString = "t" + messageId;
+                responseString = "t" + _messageId;
             }
             else
             {
-                responseString = "f" + messageId;
+                responseString = "f" + _messageId;
             }
 
-            string portString = sendingPort + ":";
+            string portString = _sender.Port + ":";
 
-            int length = data.Length + responseString.Length + 1 /* typeChar */ + portString.Length;
+            int length = _data.Length + responseString.Length + 1 /* typeChar */ + portString.Length;
 
             int magnitude = 0;
             int tempLength = length;
@@ -147,111 +270,25 @@ namespace MeshNetwork
                 ++length;
             }
 
-            return length.ToString(CultureInfo.InvariantCulture) + responseString + typeChar + portString + data;
-        }
-
-        /// <summary>
-        /// Creates a message object from a message that was received from another node.
-        /// </summary>
-        /// <param name="rawMessage">The raw message as it was received.</param>
-        /// <param name="sender">The sender of the message.</param>
-        /// <returns>An <see cref="InternalMessage" /> object the represents the received message.</returns>
-        public static InternalMessage Parse(string rawMessage, NodeProperties sender)
-        {
-            var message = new InternalMessage();
-
-            int index = 0;
-            while (index < rawMessage.Length)
-            {
-                if (!char.IsDigit(rawMessage[index]))
-                {
-                    switch (rawMessage[index])
-                    {
-                        case 'f':
-                            message._waitingForResponse = false;
-                            message._messageId = 0;
-                            break;
-
-                        case 't':
-                            message._waitingForResponse = true;
-                            break;
-                    }
-
-                    break;
-                }
-
-                ++index;
-            }
-
-            ++index;
-
-            uint messageId = 0;
-            while (index < rawMessage.Length)
-            {
-                if (!char.IsDigit(rawMessage[index]))
-                {
-                    message._messageId = messageId;
-                    break;
-                }
-
-                messageId *= 10;
-                messageId += (uint)char.GetNumericValue(rawMessage[index]);
-                ++index;
-            }
-
-            while (index < rawMessage.Length)
-            {
-                if (!char.IsDigit(rawMessage[index]))
-                {
-                    switch (rawMessage[index])
-                    {
-                        case 'n':
-                            message._type = MessageType.Neighbors;
-                            break;
-
-                        case 'p':
-                            message._type = MessageType.Ping;
-                            break;
-
-                        case 'u':
-                            message._type = MessageType.User;
-                            break;
-
-                        default:
-                            message._type = MessageType.Unknown;
-                            break;
-                    }
-
-                    break;
-                }
-
-                ++index;
-            }
-
-            ++index;
-
-            int senderPort = 0;
-            while (index < rawMessage.Length)
-            {
-                if (!char.IsDigit(rawMessage[index]))
-                {
-                    message._sender = new NodeProperties(sender.IpAddress, senderPort);
-                    message._data = rawMessage.Substring(index + 1, rawMessage.Length - (index + 1));
-                    break;
-                }
-
-                senderPort *= 10;
-                senderPort += (int)char.GetNumericValue(rawMessage[index]);
-                ++index;
-            }
-
-            return message;
+            _rawMessage = length.ToString(CultureInfo.InvariantCulture) + responseString + typeChar + portString + _data;
+            return _rawMessage;
         }
 
         /// <inheritdoc></inheritdoc>
         public override string ToString()
         {
-            return "Type: " + Enum.GetName(typeof(MessageType), _type) + " Sender: " + _sender.IpAddress + ":" + _sender.Port + " Data: " + _data;
+            string type = "Type: " + Enum.GetName(typeof(MessageType), _type);
+            string messageId = "Message ID: " + _messageId;
+            string sender = "Sender: " + _sender;
+            string data = "Data: " + _data;
+            string waitingForResponse = "Waiting for Response: " + _waitingForResponse.ToString();
+            string rawMessage = "Raw Message: " + _rawMessage;
+            if (_waitingForResponse)
+            {
+                return type + ' ' + waitingForResponse + ' ' + messageId + ' ' + sender + ' ' + data + ' ' + rawMessage;
+            }
+
+            return type + ' ' + waitingForResponse + ' ' + sender + ' ' + data + ' ' + rawMessage;
         }
     }
 }
