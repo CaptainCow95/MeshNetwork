@@ -25,6 +25,11 @@ namespace MeshNetwork
         private const int PingFrequency = 10;
 
         /// <summary>
+        /// The <see cref="Logger" /> object that this node logs to.
+        /// </summary>
+        private readonly Logger _logger;
+
+        /// <summary>
         /// A dictionary of all the messages currently being received.
         /// </summary>
         private readonly Dictionary<NodeProperties, MessageBuilder> _messages = new Dictionary<NodeProperties, MessageBuilder>();
@@ -118,8 +123,8 @@ namespace MeshNetwork
         /// Initializes a new instance of the <see cref="NetworkNode" /> class.
         /// </summary>
         public NetworkNode()
+            : this(string.Empty, LogLevels.Error)
         {
-            Logger.Init(string.Empty, LogLevels.Error);
         }
 
         /// <summary>
@@ -129,7 +134,7 @@ namespace MeshNetwork
         /// <param name="logLevel">The highest level at which log messages will be written.</param>
         public NetworkNode(string logLocation, LogLevels logLevel)
         {
-            Logger.Init(logLocation, logLevel);
+            _logger = new Logger(logLocation, logLevel);
         }
 
         /// <summary>
@@ -156,6 +161,17 @@ namespace MeshNetwork
         }
 
         /// <summary>
+        /// Gets the <see cref="Logger" /> object that this node logs to.
+        /// </summary>
+        public Logger Logger
+        {
+            get
+            {
+                return _logger;
+            }
+        }
+
+        /// <summary>
         /// Connects this node to a network.
         /// </summary>
         /// <param name="listeningPort">The port to listen on.</param>
@@ -167,7 +183,7 @@ namespace MeshNetwork
             _childThreadsRunning = true;
             _port = listeningPort;
 
-            Logger.Write("Connecting to a network: listening on " + listeningPort, LogLevels.Info);
+            _logger.Write("Connecting to a network: listening on " + listeningPort, LogLevels.Info);
 
             _messageListenerThread = new Thread(MessageListenerThreadRun);
             _messageListenerThread.Start();
@@ -188,7 +204,7 @@ namespace MeshNetwork
                 NetworkConnection connection = await GetNetworkConnection(neighbor).ConfigureAwait(false);
                 if (connection != null)
                 {
-                    Logger.Write("Connection established to " + neighbor + ", getting rest of connected machines.", LogLevels.Info);
+                    _logger.Write("Connection established to " + neighbor + ", getting rest of connected machines.", LogLevels.Info);
                     connected = true;
                     break;
                 }
@@ -203,7 +219,7 @@ namespace MeshNetwork
                         continue;
                     }
 
-                    Logger.Write("Attempting connection to " + neighbor, LogLevels.Info);
+                    _logger.Write("Attempting connection to " + neighbor, LogLevels.Info);
                     await GetNetworkConnection(neighbor).ConfigureAwait(false);
                 }
             }
@@ -216,7 +232,7 @@ namespace MeshNetwork
             _reconnectionThread.Start();
 
             _connected = true;
-            Logger.Write("Connected and ready", LogLevels.Info);
+            _logger.Write("Connected and ready", LogLevels.Info);
         }
 
         /// <summary>
@@ -225,7 +241,7 @@ namespace MeshNetwork
         public void Disconnect()
         {
             _connected = false;
-            Logger.Write("Shutting down", LogLevels.Info);
+            _logger.Write("Shutting down", LogLevels.Info);
             _childThreadsRunning = false;
             _connectionListener.Stop();
         }
@@ -317,7 +333,7 @@ namespace MeshNetwork
                     _receivingConnections[incomingNodeProperties] = new NetworkConnection { Client = incomingTcpClient, LastPingReceived = DateTime.UtcNow };
                 }
 
-                Logger.Write("Connection received from " + incomingNodeProperties, LogLevels.Info);
+                _logger.Write("Connection received from " + incomingNodeProperties, LogLevels.Info);
             }
         }
 
@@ -346,7 +362,7 @@ namespace MeshNetwork
                 TcpClient client = null;
                 try
                 {
-                    Logger.Write("Attempting connection to " + connectTo, LogLevels.Info);
+                    _logger.Write("Attempting connection to " + connectTo, LogLevels.Info);
                     client = new TcpClient();
                     await client.ConnectAsync(connectTo.IpAddress, connectTo.Port).ConfigureAwait(false);
                     NetworkConnection connection = new NetworkConnection
@@ -359,12 +375,12 @@ namespace MeshNetwork
                         _sendingConnections[connectTo] = connection;
                     }
 
-                    Logger.Write("Connection to " + connectTo + " successful", LogLevels.Info);
+                    _logger.Write("Connection to " + connectTo + " successful", LogLevels.Info);
                     return connection;
                 }
                 catch
                 {
-                    Logger.Write("Connection to " + connectTo + " failed", LogLevels.Warning);
+                    _logger.Write("Connection to " + connectTo + " failed", LogLevels.Warning);
                     if (client != null)
                     {
                         client.Close();
@@ -488,7 +504,7 @@ namespace MeshNetwork
                                         messageObject.Item1.MessageId.GetValueOrDefault(),
                                         messageObject.Item1.WaitingForResponse,
                                         messageObject.Item1.MessageId.HasValue);
-                Logger.Write("Message received, " + messageObject.Item1, LogLevels.Debug);
+                _logger.Write("Message received, " + messageObject.Item1, LogLevels.Debug);
                 switch (messageObject.Item1.Type)
                 {
                     case MessageType.Neighbors:
@@ -579,7 +595,7 @@ namespace MeshNetwork
                     // connected to.
                     foreach (var node in GetNeighbors())
                     {
-                        Logger.Write("Attempting to make connections to the neighbors of " + node, LogLevels.Info);
+                        _logger.Write("Attempting to make connections to the neighbors of " + node, LogLevels.Info);
                         foreach (
                             var neighbor in
                                 await this.GetRemoteNeighborsAsync(node).ConfigureAwait(false)
@@ -614,7 +630,7 @@ namespace MeshNetwork
 
                             if (!_sendingConnections.ContainsKey(node))
                             {
-                                Logger.Write("Attempting to reconnect to " + node, LogLevels.Info);
+                                _logger.Write("Attempting to reconnect to " + node, LogLevels.Info);
                                 foreach (
                                     var neighbor in
                                         await GetRemoteNeighborsAsync(node).ConfigureAwait(false)
@@ -682,11 +698,11 @@ namespace MeshNetwork
             try
             {
                 await connection.Client.GetStream().WriteAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
-                Logger.Write("Message sending successful " + message, LogLevels.Debug);
+                _logger.Write("Message sending successful " + message, LogLevels.Debug);
             }
             catch
             {
-                Logger.Write("Message sending failed " + message, LogLevels.Warning);
+                _logger.Write("Message sending failed " + message, LogLevels.Warning);
                 connection.Client.Close();
                 lock (_sendingLockObject)
                 {
