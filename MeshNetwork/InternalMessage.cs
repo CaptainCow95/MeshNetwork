@@ -11,50 +11,47 @@ namespace MeshNetwork
         /// <summary>
         /// The data that the message contains.
         /// </summary>
-        private string _data;
+        private readonly string _data;
+
+        /// <summary>
+        /// The destination of the message.
+        /// </summary>
+        private readonly NodeProperties _destination;
 
         /// <summary>
         /// The id belonging to this message.
         /// </summary>
-        private uint? _messageId;
+        private readonly uint? _messageId;
+
+        /// <summary>
+        /// The result of the response message.
+        /// </summary>
+        private readonly MessageResponseResult _responseResult;
+
+        /// <summary>
+        /// The sender of the message.
+        /// </summary>
+        private readonly NodeProperties _sender;
+
+        /// <summary>
+        /// The result of the original message.
+        /// </summary>
+        private readonly MessageSendResult _sendResult;
+
+        /// <summary>
+        /// The type of the message.
+        /// </summary>
+        private readonly MessageType _type;
+
+        /// <summary>
+        /// A value indicating whether the sender is waiting for a response to this message.
+        /// </summary>
+        private readonly bool _waitingForResponse;
 
         /// <summary>
         /// The raw, unparsed message.
         /// </summary>
         private string _rawMessage;
-
-        /// <summary>
-        /// The sender of the message.
-        /// </summary>
-        private NodeProperties _sender;
-
-        /// <summary>
-        /// The type of the message.
-        /// </summary>
-        private MessageType _type;
-
-        /// <summary>
-        /// A value indicating whether the sender is waiting for a response to this message.
-        /// </summary>
-        private bool _waitingForResponse;
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="InternalMessage" /> class.
-        /// </summary>
-        /// <param name="sender">The sender of the message.</param>
-        /// <param name="type">The type of message.</param>
-        /// <param name="data">The data to go along with the message.</param>
-        /// <param name="waitingForResponse">Whether this message is waiting for a response.</param>
-        /// <param name="messageId">The id of the message if it has one.</param>
-        /// <returns>The composed message to be sent over the wire to the receiving node.</returns>
-        public InternalMessage(NodeProperties sender, MessageType type, string data, bool waitingForResponse = false, uint? messageId = null)
-        {
-            _type = type;
-            _sender = sender;
-            _data = data;
-            _waitingForResponse = waitingForResponse;
-            _messageId = messageId;
-        }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="InternalMessage" /> class.
@@ -152,19 +149,73 @@ namespace MeshNetwork
         }
 
         /// <summary>
+        /// Initializes a new instance of the <see cref="InternalMessage" /> class.
+        /// </summary>
+        /// <param name="destination">The destination of the message.</param>
+        /// <param name="sender">The sender of the message.</param>
+        /// <param name="type">The type of message.</param>
+        /// <param name="data">The data to go along with the message.</param>
+        /// <param name="waitingForResponse">Whether this message is waiting for a response.</param>
+        /// <param name="messageId">The id of the message if it has one.</param>
+        /// <param name="sendResult">The result object passed back after sending a message.</param>
+        /// <param name="responseResult">
+        /// The result object passed back after sending a message waiting for a response.
+        /// </param>
+        /// <returns>The composed message to be sent over the wire to the receiving node.</returns>
+        private InternalMessage(NodeProperties destination, NodeProperties sender, MessageType type, string data, bool waitingForResponse, uint? messageId, MessageSendResult sendResult, MessageResponseResult responseResult)
+        {
+            _destination = destination;
+            _sender = sender;
+            _type = type;
+            _data = data;
+            _waitingForResponse = waitingForResponse;
+            _messageId = messageId;
+            _sendResult = sendResult;
+            _responseResult = responseResult;
+        }
+
+        /// <summary>
         /// Gets the data that the message contains.
         /// </summary>
         public string Data
         {
-            get { return _data; }
+            get
+            {
+                return _data;
+            }
+        }
+
+        /// <summary>
+        /// Gets the destination of the message.
+        /// </summary>
+        public NodeProperties Destination
+        {
+            get
+            {
+                return this._destination;
+            }
+        }
+
+        /// <summary>
+        /// Gets a value indicating whether this message was in response to another message.
+        /// </summary>
+        public bool InResponseToMessage
+        {
+            get
+            {
+                return _messageId.HasValue;
+            }
         }
 
         /// <summary>
         /// Gets the id of this message.
         /// </summary>
-        public uint? MessageId
+        public uint MessageId
         {
-            get { return _messageId; }
+            get
+            {
+                return _messageId.HasValue ? _messageId.Value : 0;
+            }
         }
 
         /// <summary>
@@ -206,6 +257,67 @@ namespace MeshNetwork
         public bool WaitingForResponse
         {
             get { return _waitingForResponse; }
+        }
+
+        /// <summary>
+        /// Creates a message that is a response to another message.
+        /// </summary>
+        /// <param name="destination">The destination of the message.</param>
+        /// <param name="sender">The sender of the message.</param>
+        /// <param name="type">The type of the message.</param>
+        /// <param name="data">The data contained in the message.</param>
+        /// <param name="messageId">The id of the message.</param>
+        /// <param name="result">The object to put the results in.</param>
+        /// <returns>A message that is a response to another message.</returns>
+        public static InternalMessage CreateResponseMessage(
+            NodeProperties destination,
+            NodeProperties sender,
+            MessageType type,
+            string data,
+            uint messageId,
+            MessageSendResult result)
+        {
+            return new InternalMessage(destination, sender, type, data, false, messageId, result, null);
+        }
+
+        /// <summary>
+        /// Creates a message to be sent.
+        /// </summary>
+        /// <param name="destination">The destination of the message.</param>
+        /// <param name="sender">The sender of the message.</param>
+        /// <param name="type">The type of the message.</param>
+        /// <param name="data">The data contained in the message.</param>
+        /// <param name="result">The object to put the results in.</param>
+        /// <returns>A message to be sent.</returns>
+        public static InternalMessage CreateSendMessage(
+            NodeProperties destination,
+            NodeProperties sender,
+            MessageType type,
+            string data,
+            MessageSendResult result)
+        {
+            return new InternalMessage(destination, sender, type, data, false, null, result, null);
+        }
+
+        /// <summary>
+        /// Creates a message to be sent and that is expecting a response.
+        /// </summary>
+        /// <param name="destination">The destination of the message.</param>
+        /// <param name="sender">The sender of the message.</param>
+        /// <param name="type">The type of the message.</param>
+        /// <param name="data">The data contained in the message.</param>
+        /// <param name="messageId">The id of the message.</param>
+        /// <param name="result">The object to put the results in.</param>
+        /// <returns>A message to be sent and that is expecting a response.</returns>
+        public static InternalMessage CreateSendResponseMessage(
+            NodeProperties destination,
+            NodeProperties sender,
+            MessageType type,
+            string data,
+            uint messageId,
+            MessageResponseResult result)
+        {
+            return new InternalMessage(destination, sender, type, data, true, messageId, null, result);
         }
 
         /// <summary>
@@ -272,6 +384,36 @@ namespace MeshNetwork
 
             _rawMessage = length.ToString(CultureInfo.InvariantCulture) + responseString + typeChar + portString + _data;
             return _rawMessage;
+        }
+
+        /// <summary>
+        /// Sets the response result.
+        /// </summary>
+        /// <param name="result">The result to set it to.</param>
+        /// <param name="response">The response message that was received.</param>
+        public void SetMessageResponseResult(ResponseResults result, Message response)
+        {
+            if (_responseResult != null)
+            {
+                _responseResult.ResponseReceived(result, response);
+            }
+        }
+
+        /// <summary>
+        /// Sets the send result.
+        /// </summary>
+        /// <param name="result">The result to set it to.</param>
+        public void SetMessageSendResult(SendResults result)
+        {
+            if (_sendResult != null)
+            {
+                _sendResult.MessageSent(result);
+            }
+
+            if (_responseResult != null)
+            {
+                _responseResult.MessageSent(result);
+            }
         }
 
         /// <inheritdoc></inheritdoc>

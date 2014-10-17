@@ -101,19 +101,6 @@ namespace MeshNetwork
             return _ipAddress.GetHashCode() ^ _port.GetHashCode();
         }
 
-        /// <summary>
-        /// Checks if this node represents the current node.
-        /// </summary>
-        /// <param name="port">The port the current node is running on.</param>
-        /// <returns>True if this node represents the current node, otherwise false.</returns>
-        public bool IsSelf(int port)
-        {
-            IPAddress[] hosts = Dns.GetHostAddresses(_ipAddress.ToString());
-            IPAddress[] locals = Dns.GetHostAddresses(Dns.GetHostName());
-
-            return hosts.Any(host => IPAddress.IsLoopback(host) || locals.Contains(host)) && _port == port;
-        }
-
         /// <inheritdoc></inheritdoc>
         public override string ToString()
         {
