@@ -46,7 +46,7 @@ namespace MeshNetwork
 
             set
             {
-                lock (this._lockObject)
+                lock (_lockObject)
                 {
                     _filename = value;
                 }
@@ -65,7 +65,7 @@ namespace MeshNetwork
 
             set
             {
-                lock (this._lockObject)
+                lock (_lockObject)
                 {
                     _logLevel = value;
                 }
@@ -79,7 +79,7 @@ namespace MeshNetwork
         /// <param name="level">The level of severity of the log message.</param>
         public void Write(string message, LogLevels level)
         {
-            lock (this._lockObject)
+            lock (_lockObject)
             {
                 if (_logLevel < level)
                 {

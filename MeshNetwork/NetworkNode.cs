@@ -25,6 +25,11 @@ namespace MeshNetwork
         private readonly Dictionary<NodeProperties, MessageBuilder> _messages = new Dictionary<NodeProperties, MessageBuilder>();
 
         /// <summary>
+        /// The queue of message to be sent out.
+        /// </summary>
+        private readonly Queue<InternalMessage> _messagesToSend = new Queue<InternalMessage>();
+
+        /// <summary>
         /// An object to lock on when managing the messages to be sent queue.
         /// </summary>
         private readonly object _messagesToSendLockObject = new object();
@@ -40,9 +45,19 @@ namespace MeshNetwork
         private readonly object _receivingLockObject = new object();
 
         /// <summary>
+        /// A queue of the objects that have gotten approval but need to be processed.
+        /// </summary>
+        private readonly Queue<ApprovedNodeDetails> _recentlyApprovedNodes = new Queue<ApprovedNodeDetails>();
+
+        /// <summary>
         /// The object to lock on for added nodes that have been approved but still need to be processed.
         /// </summary>
         private readonly object _recentlyApprovedNodesLockObject = new object();
+
+        /// <summary>
+        /// The list of nodes to attempt to reconnect to.
+        /// </summary>
+        private readonly List<NodeProperties> _reconnectNodes = new List<NodeProperties>();
 
         /// <summary>
         /// A dictionary of the message ids and their corresponding response objects.
@@ -105,11 +120,6 @@ namespace MeshNetwork
         private Thread _messageSenderThread;
 
         /// <summary>
-        /// The queue of message to be sent out.
-        /// </summary>
-        private Queue<InternalMessage> _messagesToSend = new Queue<InternalMessage>();
-
-        /// <summary>
         /// The number of seconds between pings.
         /// </summary>
         private int _pingFrequency = 10;
@@ -130,11 +140,6 @@ namespace MeshNetwork
         private volatile Dictionary<NodeProperties, NetworkConnection> _receivingConnections = new Dictionary<NodeProperties, NetworkConnection>();
 
         /// <summary>
-        /// A queue of the objects that have gotten approval but need to be processed.
-        /// </summary>
-        private Queue<NodeProperties> _recentlyApprovedNodes = new Queue<NodeProperties>();
-
-        /// <summary>
         /// The number of seconds between reconnect attempts.
         /// </summary>
         private int _reconnectionFrequency = 30;
@@ -145,11 +150,6 @@ namespace MeshNetwork
         private Thread _reconnectionThread;
 
         /// <summary>
-        /// The list of nodes to attempt to reconnect to.
-        /// </summary>
-        private List<NodeProperties> _reconnectNodes = new List<NodeProperties>();
-
-        /// <summary>
         /// A dictionary of the connections this node is sending messages on.
         /// </summary>
         private volatile Dictionary<NodeProperties, NetworkConnection> _sendingConnections = new Dictionary<NodeProperties, NetworkConnection>();
@@ -157,7 +157,7 @@ namespace MeshNetwork
         /// <summary>
         /// Initializes a new instance of the <see cref="NetworkNode" /> class.
         /// </summary>
-        public NetworkNode()
+        protected NetworkNode()
             : this(string.Empty, LogLevels.Error)
         {
         }
@@ -167,7 +167,7 @@ namespace MeshNetwork
         /// </summary>
         /// <param name="logLocation">The location to log messages to.</param>
         /// <param name="logLevel">The highest level at which log messages will be written.</param>
-        public NetworkNode(string logLocation, LogLevels logLevel)
+        protected NetworkNode(string logLocation, LogLevels logLevel)
         {
             _logger = new Logger(logLocation, logLevel);
         }
@@ -382,10 +382,16 @@ namespace MeshNetwork
         }
 
         /// <summary>
-        /// A function to be called once a node has been approved access to configure it on the node.
+        /// A function to be called on the network member once a node has been approved access.
         /// </summary>
-        /// <param name="node">The node approval was granted to.</param>
+        /// <param name="node">The node the approval request was granted from.</param>
         protected abstract void ApprovalGranted(NodeProperties node);
+
+        /// <summary>
+        /// A function to be called on the approved node once a node has been approved access.
+        /// </summary>
+        /// <param name="node">The node the approval request was granted to.</param>
+        protected abstract void ApprovalRequestGranted(NodeProperties node);
 
         /// <summary>
         /// Gets the approval of the node to join the network.
@@ -410,7 +416,7 @@ namespace MeshNetwork
                 {
                     lock (_sendingLockObject)
                     {
-                        var connection = this._sendingConnections[node];
+                        var connection = _sendingConnections[node];
                         if (connection != null)
                         {
                             connection.Approved = true;
@@ -419,7 +425,7 @@ namespace MeshNetwork
 
                     lock (_recentlyApprovedNodesLockObject)
                     {
-                        _recentlyApprovedNodes.Enqueue(node);
+                        _recentlyApprovedNodes.Enqueue(new ApprovedNodeDetails(node, false));
                     }
 
                     return true;
@@ -563,13 +569,20 @@ namespace MeshNetwork
 
                 while (count > 0)
                 {
-                    NodeProperties node;
+                    ApprovedNodeDetails details;
                     lock (_recentlyApprovedNodesLockObject)
                     {
-                        node = _recentlyApprovedNodes.Dequeue();
+                        details = _recentlyApprovedNodes.Dequeue();
                     }
 
-                    ApprovalGranted(node);
+                    if (details.ApprovalGranted)
+                    {
+                        ApprovalGranted(details.Node);
+                    }
+                    else
+                    {
+                        ApprovalRequestGranted(details.Node);
+                    }
 
                     lock (_recentlyApprovedNodesLockObject)
                     {
@@ -795,7 +808,7 @@ namespace MeshNetwork
 
                     lock (_recentlyApprovedNodesLockObject)
                     {
-                        _recentlyApprovedNodes.Enqueue(message.Sender);
+                        _recentlyApprovedNodes.Enqueue(new ApprovedNodeDetails(message.Sender, true));
                     }
                 }
                 else
@@ -922,7 +935,7 @@ namespace MeshNetwork
             }
             else
             {
-                connection = await this.GetUnapprovedNetworkConnection(message.Destination);
+                connection = await GetUnapprovedNetworkConnection(message.Destination);
             }
 
             if (connection == null)

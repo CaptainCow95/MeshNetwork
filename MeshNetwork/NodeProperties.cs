@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Linq;
 using System.Net;
+using System.Net.Sockets;
 
 namespace MeshNetwork
 {
@@ -104,7 +105,7 @@ namespace MeshNetwork
         /// <inheritdoc></inheritdoc>
         public override string ToString()
         {
-            return _ipAddress.ToString() + ':' + this._port;
+            return _ipAddress.ToString() + ':' + _port;
         }
 
         /// <summary>
@@ -116,14 +117,14 @@ namespace MeshNetwork
         {
             IPAddress address =
                 Dns.GetHostEntry(hostname)
-                    .AddressList.FirstOrDefault(e => e.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
+                    .AddressList.FirstOrDefault(e => e.AddressFamily == AddressFamily.InterNetwork);
 
             if (address != null && address.Equals(IPAddress.Loopback))
             {
                 address =
                     Dns.GetHostEntry(IPAddress.Loopback)
                         .AddressList.FirstOrDefault(
-                            e => e.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
+                            e => e.AddressFamily == AddressFamily.InterNetwork);
             }
 
             if (address == null)

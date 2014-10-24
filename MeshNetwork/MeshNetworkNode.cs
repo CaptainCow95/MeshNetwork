@@ -65,10 +65,33 @@ namespace MeshNetwork
         /// <inheritdoc></inheritdoc>
         protected override void ApprovalGranted(NodeProperties node)
         {
+            ConnectToMembers(node);
+        }
+
+        /// <inheritdoc></inheritdoc>
+        protected override void ApprovalRequestGranted(NodeProperties node)
+        {
+            ConnectToMembers(node);
+        }
+
+        /// <inheritdoc></inheritdoc>
+        protected override string GetNetworkType()
+        {
+            return "mesh";
+        }
+
+        /// <summary>
+        /// Connects to all members of the specified node.
+        /// </summary>
+        /// <param name="node">The node to connect to the members of.</param>
+        private void ConnectToMembers(NodeProperties node)
+        {
             var result = GetRemoteNeighbors(node);
             if (result.SendResult == SendResults.Success && result.ResponseResult == ResponseResults.Success)
             {
-                Logger.Write("Attempting connection to the following neighbors: " + result.ResponseMessage.Data, LogLevels.Debug);
+                Logger.Write(
+                    "Attempting connection to the following neighbors: " + result.ResponseMessage.Data,
+                    LogLevels.Debug);
                 foreach (var neighbor in
                     result.ResponseMessage.Data.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
                         .ToList()
@@ -77,12 +100,6 @@ namespace MeshNetwork
                     GetApproval(neighbor);
                 }
             }
-        }
-
-        /// <inheritdoc></inheritdoc>
-        protected override string GetNetworkType()
-        {
-            return "mesh";
         }
     }
 }

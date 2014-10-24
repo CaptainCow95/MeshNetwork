@@ -203,7 +203,7 @@ namespace MeshNetwork
         {
             get
             {
-                return this._destination;
+                return _destination;
             }
         }
 
