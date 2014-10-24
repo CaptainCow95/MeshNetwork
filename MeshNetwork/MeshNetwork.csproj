@@ -43,6 +43,7 @@
     <Compile Include="Logger.cs" />
     <Compile Include="InternalMessage.cs" />
     <Compile Include="LogLevels.cs" />
+    <Compile Include="MeshNetworkNode.cs" />
     <Compile Include="Message.cs" />
     <Compile Include="MessageBuilder.cs" />
     <Compile Include="MessageSendProgress.cs" />

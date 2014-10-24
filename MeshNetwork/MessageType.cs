@@ -6,6 +6,11 @@
     internal enum MessageType
     {
         /// <summary>
+        /// A message used to gain approval to the network.
+        /// </summary>
+        Approval,
+
+        /// <summary>
         /// A message used to get all of a nodes neighbors.
         /// </summary>
         Neighbors,

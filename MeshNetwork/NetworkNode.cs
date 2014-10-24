@@ -12,7 +12,7 @@ namespace MeshNetwork
     /// <summary>
     /// Represents a node on the network.
     /// </summary>
-    public class NetworkNode
+    public abstract class NetworkNode
     {
         /// <summary>
         /// The <see cref="Logger" /> object that this node logs to.
@@ -25,6 +25,11 @@ namespace MeshNetwork
         private readonly Dictionary<NodeProperties, MessageBuilder> _messages = new Dictionary<NodeProperties, MessageBuilder>();
 
         /// <summary>
+        /// An object to lock on when managing the messages to be sent queue.
+        /// </summary>
+        private readonly object _messagesToSendLockObject = new object();
+
+        /// <summary>
         /// A queue of the received full messages.
         /// </summary>
         private readonly Queue<Tuple<InternalMessage, NodeProperties>> _receivedMessages = new Queue<Tuple<InternalMessage, NodeProperties>>();
@@ -33,6 +38,11 @@ namespace MeshNetwork
         /// The object to lock on for message receiving constructs.
         /// </summary>
         private readonly object _receivingLockObject = new object();
+
+        /// <summary>
+        /// The object to lock on for added nodes that have been approved but still need to be processed.
+        /// </summary>
+        private readonly object _recentlyApprovedNodesLockObject = new object();
 
         /// <summary>
         /// A dictionary of the message ids and their corresponding response objects.
@@ -48,6 +58,11 @@ namespace MeshNetwork
         /// The object to lock on for message sending constructs.
         /// </summary>
         private readonly object _sendingLockObject = new object();
+
+        /// <summary>
+        /// The thread approval processing occurs on.
+        /// </summary>
+        private Thread _approvedNodeThread;
 
         /// <summary>
         /// A value indicating whether the child threads are running.
@@ -95,11 +110,6 @@ namespace MeshNetwork
         private Queue<InternalMessage> _messagesToSend = new Queue<InternalMessage>();
 
         /// <summary>
-        /// An object to lock on when managing the messages to be sent queue.
-        /// </summary>
-        private object _messagesToSendLockObject = new object();
-
-        /// <summary>
         /// The number of seconds between pings.
         /// </summary>
         private int _pingFrequency = 10;
@@ -118,6 +128,11 @@ namespace MeshNetwork
         /// A dictionary of the connections this node is receiving messages on.
         /// </summary>
         private volatile Dictionary<NodeProperties, NetworkConnection> _receivingConnections = new Dictionary<NodeProperties, NetworkConnection>();
+
+        /// <summary>
+        /// A queue of the objects that have gotten approval but need to be processed.
+        /// </summary>
+        private Queue<NodeProperties> _recentlyApprovedNodes = new Queue<NodeProperties>();
 
         /// <summary>
         /// The number of seconds between reconnect attempts.
@@ -224,22 +239,56 @@ namespace MeshNetwork
         }
 
         /// <summary>
-        /// Connects this node to a network.
+        /// Gets a value indicating whether the child threads are running.
         /// </summary>
-        /// <param name="listeningPort">The port to listen on.</param>
-        /// <param name="initialNodes">The nodes to try to connect to.</param>
-        /// <returns>A task to await on.</returns>
-        public async Task<ConnectToNetworkResults> ConnectToNetworkAsync(int listeningPort, IReadOnlyCollection<NodeProperties> initialNodes)
+        protected bool ChildThreadsRunning
         {
-            ConnectToNetworkResults result = ConnectToNetworkResults.NewNetworkCreated;
+            get
+            {
+                return _childThreadsRunning;
+            }
+        }
+
+        /// <summary>
+        /// Gets the list of nodes to try to reconnect to.
+        /// </summary>
+        protected List<NodeProperties> ReconnectNodes
+        {
+            get
+            {
+                return _reconnectNodes;
+            }
+        }
+
+        /// <summary>
+        /// Called after the network has been connected.
+        /// </summary>
+        public void AfterConnectToNetwork()
+        {
+            _pingThread = new Thread(PingThreadRun);
+            _pingThread.Start();
+
+            _reconnectionThread = new Thread(ReconnectionThreadRun);
+            _reconnectionThread.Start();
+
+            _connected = true;
+        }
+
+        /// <summary>
+        /// Called before the network tries to connect.
+        /// </summary>
+        /// <param name="listeningPort">The port the node will be listening on.</param>
+        public void BeforeConnectToNetwork(int listeningPort)
+        {
             _connected = false;
             _childThreadsRunning = true;
             _port = listeningPort;
 
-            _logger.Write("Connecting to a network: listening on " + listeningPort, LogLevels.Info);
-
             _messageListenerThread = new Thread(MessageListenerThreadRun);
             _messageListenerThread.Start();
+
+            _approvedNodeThread = new Thread(ApprovedNodeThreadRun);
+            _approvedNodeThread.Start();
 
             _messageSenderThread = new Thread(MessageSenderThreadRun);
             _messageSenderThread.Start();
@@ -248,60 +297,17 @@ namespace MeshNetwork
             _connectionListener.Start();
             _connectionListenerThread = new Thread(ConnectionListenerThreadRun);
             _connectionListenerThread.Start();
-
-            foreach (var neighbor in initialNodes)
-            {
-                if (IsSelf(neighbor))
-                {
-                    continue;
-                }
-
-                NetworkConnection connection = await GetNetworkConnection(neighbor).ConfigureAwait(false);
-                if (connection == null)
-                {
-                    continue;
-                }
-
-                this._logger.Write("Connection established to " + neighbor + ", getting rest of connected machines.", LogLevels.Info);
-
-                var getNeighborsResult = GetRemoteNeighbors(this.GetNeighbors()[0]);
-                if (getNeighborsResult.SendResult == SendResults.Success
-                    && getNeighborsResult.ResponseResult == ResponseResults.Success)
-                {
-                    result = ConnectToNetworkResults.ConnectionSuccessful;
-                    foreach (
-                        var remoteNeighbor in
-                            getNeighborsResult.ResponseMessage.Data.Split(
-                                new[] { ';' },
-                                StringSplitOptions.RemoveEmptyEntries).ToList().Select(e => new NodeProperties(e)))
-                    {
-                        if (IsSelf(remoteNeighbor))
-                        {
-                            continue;
-                        }
-
-                        this._logger.Write("Attempting connection to " + remoteNeighbor, LogLevels.Info);
-                        await this.GetNetworkConnection(remoteNeighbor).ConfigureAwait(false);
-                    }
-
-                    break;
-                }
-
-                this._logger.Write("Failed to get the rest of the connected machines, trying the next node.", LogLevels.Info);
-            }
-
-            _pingThread = new Thread(PingThreadRun);
-            _pingThread.Start();
-
-            _reconnectNodes.AddRange(initialNodes);
-            _reconnectionThread = new Thread(ReconnectionThreadRun);
-            _reconnectionThread.Start();
-
-            _connected = true;
-            _logger.Write("Connected and ready", LogLevels.Info);
-
-            return result;
         }
+
+        /// <summary>
+        /// Connects this node to a network.
+        /// </summary>
+        /// <param name="listeningPort">The port to listen on.</param>
+        /// <param name="initialNodes">The nodes to try to connect to.</param>
+        /// <returns>The results of connection to the network.</returns>
+        public abstract ConnectToNetworkResults ConnectToNetwork(
+                    int listeningPort,
+                    IEnumerable<NodeProperties> initialNodes);
 
         /// <summary>
         /// Disconnect from the network.
@@ -322,7 +328,7 @@ namespace MeshNetwork
         {
             lock (_sendingLockObject)
             {
-                return _sendingConnections.Keys.Where(e => _sendingConnections[e] != null).ToList();
+                return _sendingConnections.Keys.Where(e => _sendingConnections[e] != null && _sendingConnections[e].Approved).ToList();
             }
         }
 
@@ -336,7 +342,7 @@ namespace MeshNetwork
         /// </returns>
         public MessageResponseResult GetRemoteNeighbors(NodeProperties remoteNode)
         {
-            return SendMessageResponseInternal(remoteNode, MessageType.Neighbors, string.Empty);
+            return SendMessageResponseInternal(remoteNode, MessageType.Neighbors, string.Empty, true);
         }
 
         /// <summary>
@@ -347,7 +353,7 @@ namespace MeshNetwork
         /// <returns>A value indicating whether the message was successfully sent.</returns>
         public MessageSendResult SendMessage(NodeProperties sendTo, string message)
         {
-            return SendMessageInternal(sendTo, MessageType.User, message);
+            return SendMessageInternal(sendTo, MessageType.User, message, true);
         }
 
         /// <summary>
@@ -361,7 +367,7 @@ namespace MeshNetwork
         /// </returns>
         public MessageResponseResult SendMessageResponse(NodeProperties sendTo, string message)
         {
-            return SendMessageResponseInternal(sendTo, MessageType.User, message);
+            return SendMessageResponseInternal(sendTo, MessageType.User, message, true);
         }
 
         /// <summary>
@@ -376,23 +382,77 @@ namespace MeshNetwork
         }
 
         /// <summary>
-        /// The run function for the connection listener thread.
+        /// A function to be called once a node has been approved access to configure it on the node.
         /// </summary>
-        private void ConnectionListenerThreadRun()
-        {
-            while (_childThreadsRunning)
-            {
-                var incomingTcpClient = _connectionListener.AcceptTcpClient();
-                var ipEndPoint = (IPEndPoint)incomingTcpClient.Client.RemoteEndPoint;
-                var incomingNodeProperties = new NodeProperties(ipEndPoint.Address.MapToIPv4(), ipEndPoint.Port);
-                lock (_receivingLockObject)
-                {
-                    _receivingConnections[incomingNodeProperties] = new NetworkConnection { Client = incomingTcpClient, LastPingReceived = DateTime.UtcNow };
-                }
+        /// <param name="node">The node approval was granted to.</param>
+        protected abstract void ApprovalGranted(NodeProperties node);
 
-                _logger.Write("Connection received from " + incomingNodeProperties, LogLevels.Info);
+        /// <summary>
+        /// Gets the approval of the node to join the network.
+        /// </summary>
+        /// <param name="node">The node to get the approval of.</param>
+        /// <returns>A value indicating whether approval was granted.</returns>
+        protected bool GetApproval(NodeProperties node)
+        {
+            lock (_sendingLockObject)
+            {
+                if (_sendingConnections.ContainsKey(node) && _sendingConnections[node] != null
+                    && _sendingConnections[node].Approved)
+                {
+                    return true;
+                }
             }
+
+            var result = SendMessageResponseInternal(node, MessageType.Approval, GetNetworkType(), false);
+            if (result.SendResult == SendResults.Success && result.ResponseResult == ResponseResults.Success)
+            {
+                if (result.ResponseMessage.Data == "approved")
+                {
+                    lock (_sendingLockObject)
+                    {
+                        var connection = this._sendingConnections[node];
+                        if (connection != null)
+                        {
+                            connection.Approved = true;
+                        }
+                    }
+
+                    lock (_recentlyApprovedNodesLockObject)
+                    {
+                        _recentlyApprovedNodes.Enqueue(node);
+                    }
+
+                    return true;
+                }
+            }
+
+            return false;
         }
+
+        /// <summary>
+        /// Gets a connection to the specified node as long as that node has been approved to be connected to the network.
+        /// </summary>
+        /// <param name="connectTo">The node to connect to.</param>
+        /// <returns>The network connection associated with that node, or null if it could not be found.</returns>
+        protected NetworkConnection GetApprovedNetworkConnection(NodeProperties connectTo)
+        {
+            lock (_sendingLockObject)
+            {
+                if (_sendingConnections.ContainsKey(connectTo) && _sendingConnections[connectTo] != null
+                    && _sendingConnections[connectTo].Approved)
+                {
+                    return _sendingConnections[connectTo];
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Gets a string representing the type of the network.
+        /// </summary>
+        /// <returns>A string representing the type of the network.</returns>
+        protected abstract string GetNetworkType();
 
         /// <summary>
         /// Gets a network connection to the specified node, creating the connection if need be.
@@ -401,7 +461,7 @@ namespace MeshNetwork
         /// <returns>
         /// The network connection associated with that node, or null if it could not be created.
         /// </returns>
-        private async Task<NetworkConnection> GetNetworkConnection(NodeProperties connectTo)
+        protected async Task<NetworkConnection> GetUnapprovedNetworkConnection(NodeProperties connectTo)
         {
             bool reconnect;
             lock (_sendingLockObject)
@@ -478,7 +538,7 @@ namespace MeshNetwork
         /// </summary>
         /// <param name="node">The node to check.</param>
         /// <returns>True if the node represents the current node.</returns>
-        private bool IsSelf(NodeProperties node)
+        protected bool IsSelf(NodeProperties node)
         {
             if (_currentIpAddresses == null)
             {
@@ -489,10 +549,64 @@ namespace MeshNetwork
         }
 
         /// <summary>
+        /// The run function for the approved node thread.
+        /// </summary>
+        private void ApprovedNodeThreadRun()
+        {
+            while (_childThreadsRunning)
+            {
+                int count;
+                lock (_recentlyApprovedNodesLockObject)
+                {
+                    count = _recentlyApprovedNodes.Count;
+                }
+
+                while (count > 0)
+                {
+                    NodeProperties node;
+                    lock (_recentlyApprovedNodesLockObject)
+                    {
+                        node = _recentlyApprovedNodes.Dequeue();
+                    }
+
+                    ApprovalGranted(node);
+
+                    lock (_recentlyApprovedNodesLockObject)
+                    {
+                        count = _recentlyApprovedNodes.Count;
+                    }
+                }
+
+                Thread.Sleep(1);
+            }
+        }
+
+        /// <summary>
+        /// The run function for the connection listener thread.
+        /// </summary>
+        private void ConnectionListenerThreadRun()
+        {
+            while (_childThreadsRunning)
+            {
+                var incomingTcpClient = _connectionListener.AcceptTcpClient();
+                var ipEndPoint = (IPEndPoint)incomingTcpClient.Client.RemoteEndPoint;
+                var incomingNodeProperties = new NodeProperties(ipEndPoint.Address.MapToIPv4(), ipEndPoint.Port);
+                _logger.Write("Connection received from " + incomingNodeProperties, LogLevels.Info);
+
+                lock (_receivingLockObject)
+                {
+                    _receivingConnections[incomingNodeProperties] = new NetworkConnection { Client = incomingTcpClient, LastPingReceived = DateTime.UtcNow };
+                }
+            }
+        }
+
+        /// <summary>
         /// The run function for the message listener thread.
         /// </summary>
-        private async void MessageListenerThreadRun()
+        private void MessageListenerThreadRun()
         {
+            const int MessageBufferSize = 1024;
+            var messageBuffer = new byte[MessageBufferSize];
             while (_childThreadsRunning)
             {
                 lock (_receivingLockObject)
@@ -504,12 +618,11 @@ namespace MeshNetwork
                             _messages[key] = new MessageBuilder();
                         }
 
-                        var availableBytes = _receivingConnections[key].Client.Available;
-                        if (availableBytes > 0)
+                        NetworkStream stream = _receivingConnections[key].Client.GetStream();
+                        if (stream.DataAvailable)
                         {
-                            var buffer = new byte[availableBytes];
-                            _receivingConnections[key].Client.GetStream().Read(buffer, 0, availableBytes);
-                            _messages[key].Message.Append(Encoding.Default.GetString(buffer));
+                            int bytesRead = stream.Read(messageBuffer, 0, MessageBufferSize);
+                            _messages[key].Message.Append(Encoding.Default.GetString(messageBuffer, 0, bytesRead));
 
                             if (_messages[key].Length == -1 && _messages[key].Message.Length > 0)
                             {
@@ -538,9 +651,9 @@ namespace MeshNetwork
                     }
                 }
 
-                await ProcessMessages().ConfigureAwait(false);
+                ProcessMessages();
 
-                await Task.Delay(1).ConfigureAwait(false);
+                Thread.Sleep(1);
             }
         }
 
@@ -599,7 +712,7 @@ namespace MeshNetwork
                 // Get a copy to avoid using a lock and causing a deadlock
                 foreach (var node in GetNeighbors())
                 {
-                    SendMessageInternal(node, MessageType.Ping, string.Empty);
+                    SendMessageInternal(node, MessageType.Ping, string.Empty, true);
                 }
 
                 Thread.Sleep(_pingFrequency * 1000);
@@ -609,8 +722,7 @@ namespace MeshNetwork
         /// <summary>
         /// Processes all received messages.
         /// </summary>
-        /// <returns>A task to await on.</returns>
-        private async Task ProcessMessages()
+        private void ProcessMessages()
         {
             while (_receivedMessages.Count > 0)
             {
@@ -622,14 +734,27 @@ namespace MeshNetwork
                                         messageObject.Item1.WaitingForResponse,
                                         messageObject.Item1.InResponseToMessage);
                 _logger.Write("Message received, " + messageObject.Item1, LogLevels.Debug);
+
+                if (message.InResponseToMessage)
+                {
+                    lock (_responsesLockObject)
+                    {
+                        _responses[message.MessageId] = message;
+                    }
+                }
+
                 switch (messageObject.Item1.Type)
                 {
+                    case MessageType.Approval:
+                        ReceivedApprovalMessage(message);
+                        break;
+
                     case MessageType.Neighbors:
                         ReceivedNeighborsMessage(message);
                         break;
 
                     case MessageType.Ping:
-                        await ReceivedPing(message).ConfigureAwait(false);
+                        ReceivedPing(message);
                         break;
 
                     case MessageType.User:
@@ -642,6 +767,40 @@ namespace MeshNetwork
 
                     case MessageType.Unknown:
                         break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Called when an approval message is received.
+        /// </summary>
+        /// <param name="message">The message that was received.</param>
+        private void ReceivedApprovalMessage(Message message)
+        {
+            if (message.AwaitingResponse)
+            {
+                if (message.Data == GetNetworkType())
+                {
+                    // Setup a connection to the sender so that we can approve it.
+                    Task.WaitAll(GetUnapprovedNetworkConnection(message.Sender));
+                    lock (_sendingLockObject)
+                    {
+                        if (_sendingConnections.ContainsKey(message.Sender) && _sendingConnections[message.Sender] != null)
+                        {
+                            _sendingConnections[message.Sender].Approved = true;
+                        }
+                    }
+
+                    SendResponseInternal(message, MessageType.Approval, "approved");
+
+                    lock (_recentlyApprovedNodesLockObject)
+                    {
+                        _recentlyApprovedNodes.Enqueue(message.Sender);
+                    }
+                }
+                else
+                {
+                    SendResponseInternal(message, MessageType.Approval, "failure");
                 }
             }
         }
@@ -671,23 +830,15 @@ namespace MeshNetwork
 
                 SendResponseInternal(message, MessageType.Neighbors, builder.ToString());
             }
-            else if (message.InResponseToMessage)
-            {
-                lock (_responsesLockObject)
-                {
-                    _responses[message.MessageId] = message;
-                }
-            }
         }
 
         /// <summary>
         /// Called when a ping message is received.
         /// </summary>
         /// <param name="message">The message received.</param>
-        /// <returns>A task to await on.</returns>
-        private async Task ReceivedPing(Message message)
+        private void ReceivedPing(Message message)
         {
-            NetworkConnection connection = await GetNetworkConnection(message.Sender).ConfigureAwait(false);
+            NetworkConnection connection = GetApprovedNetworkConnection(message.Sender);
             if (connection != null)
             {
                 connection.LastPingReceived = DateTime.UtcNow;
@@ -700,87 +851,19 @@ namespace MeshNetwork
         private async void ReconnectionThreadRun()
         {
             await Task.Delay(_reconnectionFrequency * 500).ConfigureAwait(false);
-            while (_childThreadsRunning)
+            while (ChildThreadsRunning)
             {
-                bool reconnected = true;
-                while (reconnected)
+                // Look for neighbors that we tried to connect to initially, but are no longer
+                // connected to.
+                foreach (var node in _reconnectNodes)
                 {
-                    reconnected = false;
-
-                    // Go through looking for other nodes that are connected but that we are not
-                    // connected to.
-                    foreach (var node in GetNeighbors())
+                    if (!GetNeighbors().Contains(node))
                     {
-                        _logger.Write("Attempting to make connections to the neighbors of " + node, LogLevels.Info);
-                        var getNeighborsResult = GetRemoteNeighbors(node);
-                        if (getNeighborsResult.SendResult == SendResults.Success
-                            && getNeighborsResult.ResponseResult == ResponseResults.Success)
-                        {
-                            foreach (var neighbor in
-                                getNeighborsResult.ResponseMessage.Data.Split(
-                                    new[] { ';' },
-                                    StringSplitOptions.RemoveEmptyEntries).ToList().Select(e => new NodeProperties(IPAddress.Parse(e.Split(':')[0]), int.Parse(e.Split(':')[1]))))
-                            {
-                                if (IsSelf(neighbor))
-                                {
-                                    continue;
-                                }
-
-                                if (!_sendingConnections.ContainsKey(neighbor))
-                                {
-                                    // Attempt a connection
-                                    if (await this.GetNetworkConnection(neighbor).ConfigureAwait(false) != null)
-                                    {
-                                        reconnected = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Look for neighbors that we tried to connect to initially, but are no longer
-                    // connected to.
-                    if (_reconnectNodes != null)
-                    {
-                        foreach (var node in _reconnectNodes)
-                        {
-                            if (IsSelf(node))
-                            {
-                                continue;
-                            }
-
-                            if (!_sendingConnections.ContainsKey(node))
-                            {
-                                _logger.Write("Attempting to reconnect to " + node, LogLevels.Info);
-                                var getNeighborsResult = GetRemoteNeighbors(node);
-                                if (getNeighborsResult.SendResult == SendResults.Success
-                                    && getNeighborsResult.ResponseResult == ResponseResults.Success)
-                                {
-                                    foreach (var neighbor in
-                                        getNeighborsResult.ResponseMessage.Data.Split(
-                                            new[] { ';' },
-                                            StringSplitOptions.RemoveEmptyEntries)
-                                            .ToList()
-                                            .Select(e => new NodeProperties(e)))
-                                    {
-                                        if (IsSelf(node))
-                                        {
-                                            continue;
-                                        }
-
-                                        // Attempt a connection
-                                        if (await GetNetworkConnection(neighbor).ConfigureAwait(false) != null)
-                                        {
-                                            reconnected = true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        GetApproval(node);
                     }
                 }
 
-                await Task.Delay(this._reconnectionFrequency * 1000).ConfigureAwait(false);
+                await Task.Delay(_reconnectionFrequency * 1000).ConfigureAwait(false);
             }
         }
 
@@ -790,8 +873,9 @@ namespace MeshNetwork
         /// <param name="sendTo">The node to send the message to.</param>
         /// <param name="type">The type of message to send.</param>
         /// <param name="message">The message to send.</param>
+        /// <param name="needsApprovedConnection">A value indicating whether the connection needs to have been approved.</param>
         /// <returns>A value indicating whether the message was successfully sent.</returns>
-        private MessageSendResult SendMessageInternal(NodeProperties sendTo, MessageType type, string message)
+        private MessageSendResult SendMessageInternal(NodeProperties sendTo, MessageType type, string message, bool needsApprovedConnection)
         {
             var result = new MessageSendResult();
             var composedMessage = InternalMessage.CreateSendMessage(
@@ -799,7 +883,8 @@ namespace MeshNetwork
                 new NodeProperties("localhost", _port),
                 type,
                 message,
-                result);
+                result,
+                needsApprovedConnection);
 
             lock (_messagesToSendLockObject)
             {
@@ -830,7 +915,16 @@ namespace MeshNetwork
                 return;
             }
 
-            var connection = await GetNetworkConnection(message.Destination).ConfigureAwait(false);
+            NetworkConnection connection;
+            if (message.NeedsApprovedConnection)
+            {
+                connection = GetApprovedNetworkConnection(message.Destination);
+            }
+            else
+            {
+                connection = await this.GetUnapprovedNetworkConnection(message.Destination);
+            }
+
             if (connection == null)
             {
                 message.SetMessageSendResult(SendResults.ConnectionFailure);
@@ -849,6 +943,7 @@ namespace MeshNetwork
             try
             {
                 await connection.Client.GetStream().WriteAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+                message.SetMessageSendResult(SendResults.Success);
                 _logger.Write("Message sending successful " + message, LogLevels.Debug);
             }
             catch
@@ -912,8 +1007,9 @@ namespace MeshNetwork
         /// <param name="sendTo">The node to send the message to.</param>
         /// <param name="type">The type of message to send.</param>
         /// <param name="message">The message to send.</param>
+        /// <param name="needsApprovedConnection">A value indicating whether the connection needs to have been approved.</param>
         /// <returns>A value indicating whether the message was successfully sent.</returns>
-        private MessageResponseResult SendMessageResponseInternal(NodeProperties sendTo, MessageType type, string message)
+        private MessageResponseResult SendMessageResponseInternal(NodeProperties sendTo, MessageType type, string message, bool needsApprovedConnection)
         {
             uint id = (uint)Interlocked.Increment(ref _messageIdCounter);
             lock (_responsesLockObject)
@@ -928,7 +1024,8 @@ namespace MeshNetwork
                 type,
                 message,
                 id,
-                result);
+                result,
+                needsApprovedConnection);
 
             lock (_messagesToSendLockObject)
             {

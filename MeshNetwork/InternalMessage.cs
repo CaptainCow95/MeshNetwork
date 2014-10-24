@@ -24,6 +24,11 @@ namespace MeshNetwork
         private readonly uint? _messageId;
 
         /// <summary>
+        /// A value indicating whether the message has to be sent to an approved member of the network.
+        /// </summary>
+        private readonly bool _needsApprovedConnection;
+
+        /// <summary>
         /// The result of the response message.
         /// </summary>
         private readonly MessageResponseResult _responseResult;
@@ -107,6 +112,10 @@ namespace MeshNetwork
                 {
                     switch (rawMessage[index])
                     {
+                        case 'a':
+                            _type = MessageType.Approval;
+                            break;
+
                         case 'n':
                             _type = MessageType.Neighbors;
                             break;
@@ -161,8 +170,9 @@ namespace MeshNetwork
         /// <param name="responseResult">
         /// The result object passed back after sending a message waiting for a response.
         /// </param>
+        /// <param name="needsApprovedConnection">A value indicating whether the connection needs to have been approved.</param>
         /// <returns>The composed message to be sent over the wire to the receiving node.</returns>
-        private InternalMessage(NodeProperties destination, NodeProperties sender, MessageType type, string data, bool waitingForResponse, uint? messageId, MessageSendResult sendResult, MessageResponseResult responseResult)
+        private InternalMessage(NodeProperties destination, NodeProperties sender, MessageType type, string data, bool waitingForResponse, uint? messageId, MessageSendResult sendResult, MessageResponseResult responseResult, bool needsApprovedConnection)
         {
             _destination = destination;
             _sender = sender;
@@ -172,6 +182,7 @@ namespace MeshNetwork
             _messageId = messageId;
             _sendResult = sendResult;
             _responseResult = responseResult;
+            _needsApprovedConnection = needsApprovedConnection;
         }
 
         /// <summary>
@@ -203,7 +214,7 @@ namespace MeshNetwork
         {
             get
             {
-                return _messageId.HasValue;
+                return _messageId.HasValue && _waitingForResponse == false;
             }
         }
 
@@ -215,6 +226,17 @@ namespace MeshNetwork
             get
             {
                 return _messageId.HasValue ? _messageId.Value : 0;
+            }
+        }
+
+        /// <summary>
+        /// Gets a value indicating whether the message has to be sent to an approved member of the network.
+        /// </summary>
+        public bool NeedsApprovedConnection
+        {
+            get
+            {
+                return _needsApprovedConnection;
             }
         }
 
@@ -277,7 +299,7 @@ namespace MeshNetwork
             uint messageId,
             MessageSendResult result)
         {
-            return new InternalMessage(destination, sender, type, data, false, messageId, result, null);
+            return new InternalMessage(destination, sender, type, data, false, messageId, result, null, false);
         }
 
         /// <summary>
@@ -288,15 +310,17 @@ namespace MeshNetwork
         /// <param name="type">The type of the message.</param>
         /// <param name="data">The data contained in the message.</param>
         /// <param name="result">The object to put the results in.</param>
+        /// <param name="needsApprovedConnection">A value indicating whether the connection needs to have been approved.</param>
         /// <returns>A message to be sent.</returns>
         public static InternalMessage CreateSendMessage(
             NodeProperties destination,
             NodeProperties sender,
             MessageType type,
             string data,
-            MessageSendResult result)
+            MessageSendResult result,
+            bool needsApprovedConnection)
         {
-            return new InternalMessage(destination, sender, type, data, false, null, result, null);
+            return new InternalMessage(destination, sender, type, data, false, null, result, null, needsApprovedConnection);
         }
 
         /// <summary>
@@ -308,6 +332,7 @@ namespace MeshNetwork
         /// <param name="data">The data contained in the message.</param>
         /// <param name="messageId">The id of the message.</param>
         /// <param name="result">The object to put the results in.</param>
+        /// <param name="needsApprovedConnection">A value indicating whether the connection needs to have been approved.</param>
         /// <returns>A message to be sent and that is expecting a response.</returns>
         public static InternalMessage CreateSendResponseMessage(
             NodeProperties destination,
@@ -315,9 +340,10 @@ namespace MeshNetwork
             MessageType type,
             string data,
             uint messageId,
-            MessageResponseResult result)
+            MessageResponseResult result,
+            bool needsApprovedConnection)
         {
-            return new InternalMessage(destination, sender, type, data, true, messageId, null, result);
+            return new InternalMessage(destination, sender, type, data, true, messageId, null, result, needsApprovedConnection);
         }
 
         /// <summary>
@@ -329,6 +355,10 @@ namespace MeshNetwork
             char typeChar;
             switch (_type)
             {
+                case MessageType.Approval:
+                    typeChar = 'a';
+                    break;
+
                 case MessageType.Neighbors:
                     typeChar = 'n';
                     break;
@@ -342,7 +372,7 @@ namespace MeshNetwork
                     break;
 
                 default:
-                    return null;
+                    throw new NotImplementedException();
             }
 
             string responseString;
@@ -425,7 +455,7 @@ namespace MeshNetwork
             string data = "Data: " + _data;
             string waitingForResponse = "Waiting for Response: " + _waitingForResponse.ToString();
             string rawMessage = "Raw Message: " + _rawMessage;
-            if (_waitingForResponse)
+            if (_waitingForResponse || _messageId.HasValue)
             {
                 return type + ' ' + waitingForResponse + ' ' + messageId + ' ' + sender + ' ' + data + ' ' + rawMessage;
             }
