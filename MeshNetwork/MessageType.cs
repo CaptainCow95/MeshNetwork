@@ -3,7 +3,7 @@
     /// <summary>
     /// An enumeration of the different types of messages.
     /// </summary>
-    internal enum MessageType
+    public enum MessageType
     {
         /// <summary>
         /// A message used to gain approval to the network.
@@ -19,6 +19,11 @@
         /// A message used as a ping.
         /// </summary>
         Ping,
+
+        /// <summary>
+        /// A message used to manage the system.
+        /// </summary>
+        System,
 
         /// <summary>
         /// A message that the user has sent.

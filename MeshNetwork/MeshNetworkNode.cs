@@ -80,6 +80,26 @@ namespace MeshNetwork
             return "mesh";
         }
 
+        /// <inheritdoc></inheritdoc>
+        protected override void ReceivedSystemMessage(Message message)
+        {
+            // Do nothing, there are no system messages used in a mesh network.
+        }
+
+        /// <inheritdoc></inheritdoc>
+        protected override void UpdateNetwork()
+        {
+            // Look for neighbors that we tried to connect to initially, but are no longer
+            // connected to.
+            foreach (var node in ReconnectNodes)
+            {
+                if (!GetNeighbors().Contains(node))
+                {
+                    GetApproval(node);
+                }
+            }
+        }
+
         /// <summary>
         /// Connects to all members of the specified node.
         /// </summary>

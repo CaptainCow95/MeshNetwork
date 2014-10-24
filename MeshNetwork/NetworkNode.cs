@@ -140,19 +140,19 @@ namespace MeshNetwork
         private volatile Dictionary<NodeProperties, NetworkConnection> _receivingConnections = new Dictionary<NodeProperties, NetworkConnection>();
 
         /// <summary>
-        /// The number of seconds between reconnect attempts.
+        /// A dictionary of the connections this node is sending messages on.
         /// </summary>
-        private int _reconnectionFrequency = 30;
+        private volatile Dictionary<NodeProperties, NetworkConnection> _sendingConnections = new Dictionary<NodeProperties, NetworkConnection>();
+
+        /// <summary>
+        /// The number of seconds between update attempts.
+        /// </summary>
+        private int _updateNetworkFrequency = 30;
 
         /// <summary>
         /// A thread to manage trying to reconnect to various nodes.
         /// </summary>
-        private Thread _reconnectionThread;
-
-        /// <summary>
-        /// A dictionary of the connections this node is sending messages on.
-        /// </summary>
-        private volatile Dictionary<NodeProperties, NetworkConnection> _sendingConnections = new Dictionary<NodeProperties, NetworkConnection>();
+        private Thread _updateNetworkThread;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="NetworkNode" /> class.
@@ -223,18 +223,29 @@ namespace MeshNetwork
         }
 
         /// <summary>
-        /// Gets or sets the number of seconds between reconnect attempts.
+        /// Gets the port this node is currently running on.
         /// </summary>
-        public int ReconnectionFrequency
+        public int Port
         {
             get
             {
-                return _reconnectionFrequency;
+                return _port;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets the number of seconds between update attempts.
+        /// </summary>
+        public int UpdateNetworkFrequency
+        {
+            get
+            {
+                return _updateNetworkFrequency;
             }
 
             set
             {
-                _reconnectionFrequency = value;
+                _updateNetworkFrequency = value;
             }
         }
 
@@ -268,8 +279,8 @@ namespace MeshNetwork
             _pingThread = new Thread(PingThreadRun);
             _pingThread.Start();
 
-            _reconnectionThread = new Thread(ReconnectionThreadRun);
-            _reconnectionThread.Start();
+            _updateNetworkThread = new Thread(UpdateNetworkThreadRun);
+            _updateNetworkThread.Start();
 
             _connected = true;
         }
@@ -555,6 +566,104 @@ namespace MeshNetwork
         }
 
         /// <summary>
+        /// Called when a system message is received.
+        /// </summary>
+        /// <param name="message">The message that was received.</param>
+        protected abstract void ReceivedSystemMessage(Message message);
+
+        /// <summary>
+        /// Sends a message to a node.
+        /// </summary>
+        /// <param name="sendTo">The node to send the message to.</param>
+        /// <param name="type">The type of message to send.</param>
+        /// <param name="message">The message to send.</param>
+        /// <param name="needsApprovedConnection">A value indicating whether the connection needs to have been approved.</param>
+        /// <returns>A value indicating whether the message was successfully sent.</returns>
+        protected MessageSendResult SendMessageInternal(NodeProperties sendTo, MessageType type, string message, bool needsApprovedConnection)
+        {
+            var result = new MessageSendResult();
+            var composedMessage = InternalMessage.CreateSendMessage(
+                sendTo,
+                new NodeProperties("localhost", _port),
+                type,
+                message,
+                result,
+                needsApprovedConnection);
+
+            lock (_messagesToSendLockObject)
+            {
+                _messagesToSend.Enqueue(composedMessage);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Sends a message to a node and awaits a response.
+        /// </summary>
+        /// <param name="sendTo">The node to send the message to.</param>
+        /// <param name="type">The type of message to send.</param>
+        /// <param name="message">The message to send.</param>
+        /// <param name="needsApprovedConnection">A value indicating whether the connection needs to have been approved.</param>
+        /// <returns>A value indicating whether the message was successfully sent.</returns>
+        protected MessageResponseResult SendMessageResponseInternal(NodeProperties sendTo, MessageType type, string message, bool needsApprovedConnection)
+        {
+            uint id = (uint)Interlocked.Increment(ref _messageIdCounter);
+            lock (_responsesLockObject)
+            {
+                _responses[id] = null;
+            }
+
+            var result = new MessageResponseResult();
+            var composedMessage = InternalMessage.CreateSendResponseMessage(
+                sendTo,
+                new NodeProperties("localhost", _port),
+                type,
+                message,
+                id,
+                result,
+                needsApprovedConnection);
+
+            lock (_messagesToSendLockObject)
+            {
+                _messagesToSend.Enqueue(composedMessage);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Sends a response message to a node.
+        /// </summary>
+        /// <param name="responseTo">The message that this message is in response to.</param>
+        /// <param name="type">The type of message to send.</param>
+        /// <param name="message">The message to send.</param>
+        /// <returns>A value indicating whether the message was successfully sent.</returns>
+        protected MessageSendResult SendResponseInternal(Message responseTo, MessageType type, string message)
+        {
+            var result = new MessageSendResult();
+            var composedMessage = InternalMessage.CreateResponseMessage(
+                responseTo.Sender,
+                new NodeProperties("localhost", _port),
+                type,
+                message,
+                responseTo.MessageId,
+                result);
+
+            lock (_messagesToSendLockObject)
+            {
+                _messagesToSend.Enqueue(composedMessage);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Updates the network.
+        /// </summary>
+        protected abstract void UpdateNetwork();
+
+        /// <summary>
         /// The run function for the approved node thread.
         /// </summary>
         private void ApprovedNodeThreadRun()
@@ -770,6 +879,10 @@ namespace MeshNetwork
                         ReceivedPing(message);
                         break;
 
+                    case MessageType.System:
+                        ReceivedSystemMessage(message);
+                        break;
+
                     case MessageType.User:
                         if (ReceivedMessage != null)
                         {
@@ -856,55 +969,6 @@ namespace MeshNetwork
             {
                 connection.LastPingReceived = DateTime.UtcNow;
             }
-        }
-
-        /// <summary>
-        /// The run function for the reconnection thread.
-        /// </summary>
-        private async void ReconnectionThreadRun()
-        {
-            await Task.Delay(_reconnectionFrequency * 500).ConfigureAwait(false);
-            while (ChildThreadsRunning)
-            {
-                // Look for neighbors that we tried to connect to initially, but are no longer
-                // connected to.
-                foreach (var node in _reconnectNodes)
-                {
-                    if (!GetNeighbors().Contains(node))
-                    {
-                        GetApproval(node);
-                    }
-                }
-
-                await Task.Delay(_reconnectionFrequency * 1000).ConfigureAwait(false);
-            }
-        }
-
-        /// <summary>
-        /// Sends a message to a node.
-        /// </summary>
-        /// <param name="sendTo">The node to send the message to.</param>
-        /// <param name="type">The type of message to send.</param>
-        /// <param name="message">The message to send.</param>
-        /// <param name="needsApprovedConnection">A value indicating whether the connection needs to have been approved.</param>
-        /// <returns>A value indicating whether the message was successfully sent.</returns>
-        private MessageSendResult SendMessageInternal(NodeProperties sendTo, MessageType type, string message, bool needsApprovedConnection)
-        {
-            var result = new MessageSendResult();
-            var composedMessage = InternalMessage.CreateSendMessage(
-                sendTo,
-                new NodeProperties("localhost", _port),
-                type,
-                message,
-                result,
-                needsApprovedConnection);
-
-            lock (_messagesToSendLockObject)
-            {
-                _messagesToSend.Enqueue(composedMessage);
-            }
-
-            return result;
         }
 
         /// <summary>
@@ -1015,63 +1079,18 @@ namespace MeshNetwork
         }
 
         /// <summary>
-        /// Sends a message to a node and awaits a response.
+        /// The run function for the reconnection thread.
         /// </summary>
-        /// <param name="sendTo">The node to send the message to.</param>
-        /// <param name="type">The type of message to send.</param>
-        /// <param name="message">The message to send.</param>
-        /// <param name="needsApprovedConnection">A value indicating whether the connection needs to have been approved.</param>
-        /// <returns>A value indicating whether the message was successfully sent.</returns>
-        private MessageResponseResult SendMessageResponseInternal(NodeProperties sendTo, MessageType type, string message, bool needsApprovedConnection)
+        private async void UpdateNetworkThreadRun()
         {
-            uint id = (uint)Interlocked.Increment(ref _messageIdCounter);
-            lock (_responsesLockObject)
+            await Task.Delay(_updateNetworkFrequency * 500).ConfigureAwait(false);
+            while (ChildThreadsRunning)
             {
-                _responses[id] = null;
+                Logger.Write("Updating network", LogLevels.Debug);
+                UpdateNetwork();
+
+                await Task.Delay(_updateNetworkFrequency * 1000).ConfigureAwait(false);
             }
-
-            var result = new MessageResponseResult();
-            var composedMessage = InternalMessage.CreateSendResponseMessage(
-                sendTo,
-                new NodeProperties("localhost", _port),
-                type,
-                message,
-                id,
-                result,
-                needsApprovedConnection);
-
-            lock (_messagesToSendLockObject)
-            {
-                _messagesToSend.Enqueue(composedMessage);
-            }
-
-            return result;
-        }
-
-        /// <summary>
-        /// Sends a response message to a node.
-        /// </summary>
-        /// <param name="responseTo">The message that this message is in response to.</param>
-        /// <param name="type">The type of message to send.</param>
-        /// <param name="message">The message to send.</param>
-        /// <returns>A value indicating whether the message was successfully sent.</returns>
-        private MessageSendResult SendResponseInternal(Message responseTo, MessageType type, string message)
-        {
-            var result = new MessageSendResult();
-            var composedMessage = InternalMessage.CreateResponseMessage(
-                responseTo.Sender,
-                new NodeProperties("localhost", _port),
-                type,
-                message,
-                responseTo.MessageId,
-                result);
-
-            lock (_messagesToSendLockObject)
-            {
-                _messagesToSend.Enqueue(composedMessage);
-            }
-
-            return result;
         }
     }
 }

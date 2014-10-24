@@ -40,6 +40,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="ApprovedNodeDetails.cs" />
+    <Compile Include="ChordNetworkNode.cs" />
     <Compile Include="ConnectToNetworkResults.cs" />
     <Compile Include="Logger.cs" />
     <Compile Include="InternalMessage.cs" />

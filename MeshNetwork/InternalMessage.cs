@@ -124,6 +124,10 @@ namespace MeshNetwork
                             _type = MessageType.Ping;
                             break;
 
+                        case 's':
+                            _type = MessageType.System;
+                            break;
+
                         case 'u':
                             _type = MessageType.User;
                             break;
@@ -365,6 +369,10 @@ namespace MeshNetwork
 
                 case MessageType.Ping:
                     typeChar = 'p';
+                    break;
+
+                case MessageType.System:
+                    typeChar = 's';
                     break;
 
                 case MessageType.User:
