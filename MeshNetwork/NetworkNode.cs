@@ -353,7 +353,7 @@ namespace MeshNetwork
         /// </returns>
         public MessageResponseResult GetRemoteNeighbors(NodeProperties remoteNode)
         {
-            return SendMessageResponseInternal(remoteNode, MessageType.Neighbors, string.Empty, true);
+            return SendMessageResponseInternal(remoteNode, MessageType.Neighbors, string.Empty, false);
         }
 
         /// <summary>
@@ -364,7 +364,7 @@ namespace MeshNetwork
         /// <returns>A value indicating whether the message was successfully sent.</returns>
         public MessageSendResult SendMessage(NodeProperties sendTo, string message)
         {
-            return SendMessageInternal(sendTo, MessageType.User, message, true);
+            return SendMessageInternal(sendTo, MessageType.User, message, false);
         }
 
         /// <summary>
@@ -378,7 +378,7 @@ namespace MeshNetwork
         /// </returns>
         public MessageResponseResult SendMessageResponse(NodeProperties sendTo, string message)
         {
-            return SendMessageResponseInternal(sendTo, MessageType.User, message, true);
+            return SendMessageResponseInternal(sendTo, MessageType.User, message, false);
         }
 
         /// <summary>

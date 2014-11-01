@@ -1,6 +1,7 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
-using System.Net.NetworkInformation;
 using System.Threading;
 
 namespace MeshNetwork
@@ -10,6 +11,26 @@ namespace MeshNetwork
     /// </summary>
     public class ChordNetworkNode : NetworkNode
     {
+        /// <summary>
+        /// The object to lock on when handling the _findSuccessorQueue object.
+        /// </summary>
+        private readonly object _findsuccessorLockObject = new object();
+
+        /// <summary>
+        /// A queue of the successor to find.
+        /// </summary>
+        private readonly Queue<Message> _findSuccessorQueue = new Queue<Message>();
+
+        /// <summary>
+        /// A list of the fingers and which nodes they represent.
+        /// </summary>
+        private readonly List<Tuple<NodeProperties, int>> _fingerTable = new List<Tuple<NodeProperties, int>>();
+
+        /// <summary>
+        /// The object to lock on when handling the finger table.
+        /// </summary>
+        private readonly object _fingerTableLockObject = new object();
+
         /// <summary>
         /// A queue of the nodes to run the Notify object on.
         /// </summary>
@@ -26,9 +47,14 @@ namespace MeshNetwork
         private readonly object _successorPredecessorLockObject = new object();
 
         /// <summary>
+        /// The thread running the find successor thread.
+        /// </summary>
+        private Thread _findSuccessorThread;
+
+        /// <summary>
         /// The id of the current node.
         /// </summary>
-        private string _id;
+        private int _id;
 
         /// <summary>
         /// The thread running the notify functions.
@@ -43,7 +69,7 @@ namespace MeshNetwork
         /// <summary>
         /// The preceding node's id.
         /// </summary>
-        private string _predecessorId = string.Empty;
+        private int _predecessorId = -1;
 
         /// <summary>
         /// A value indicating whether the node is starting up.
@@ -58,7 +84,7 @@ namespace MeshNetwork
         /// <summary>
         /// The next node's id.
         /// </summary>
-        private string _successorId = string.Empty;
+        private int _successorId = -1;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ChordNetworkNode" /> class.
@@ -75,6 +101,17 @@ namespace MeshNetwork
         public ChordNetworkNode(string logLocation, LogLevels logLevel)
             : base(logLocation, logLevel)
         {
+        }
+
+        /// <summary>
+        /// Gets the id of the node.
+        /// </summary>
+        public int Id
+        {
+            get
+            {
+                return _id;
+            }
         }
 
         /// <summary>
@@ -104,7 +141,7 @@ namespace MeshNetwork
         {
             Logger.Write("Connecting to a chord network: listening on " + listeningPort, LogLevels.Info);
 
-            _id = NetworkInterface.GetAllNetworkInterfaces().First().GetPhysicalAddress().ToString() + listeningPort;
+            _id = new Random().Next();
 
             ConnectToNetworkResults result = ConnectToNetworkResults.NewNetworkCreated;
 
@@ -112,6 +149,14 @@ namespace MeshNetwork
 
             _notifyThread = new Thread(NotifyThreadRun);
             _notifyThread.Start();
+
+            _findSuccessorThread = new Thread(FindSuccessorThreadRun);
+            _findSuccessorThread.Start();
+
+            for (int i = 0; i < 31; ++i)
+            {
+                _fingerTable.Add(null);
+            }
 
             _startup = true;
 
@@ -146,6 +191,75 @@ namespace MeshNetwork
             return result;
         }
 
+        /// <summary>
+        /// Gets all the fingers that have been sorted out.
+        /// </summary>
+        /// <returns>The fingers that have been sorted out.</returns>
+        public List<NodeProperties> GetFingers()
+        {
+            lock (_fingerTableLockObject)
+            {
+                return new List<NodeProperties>(_fingerTable.Where(e => e != null).Select(e => e.Item1));
+            }
+        }
+
+        /// <summary>
+        /// Gets the node containing the id.
+        /// </summary>
+        /// <param name="id">The id to lookup.</param>
+        /// <returns>The node containing the id, null if it is the current node.</returns>
+        public NodeProperties GetNodeContainingId(int id)
+        {
+            var node = FindSuccessor(id);
+            if (node == null)
+            {
+                return null;
+            }
+
+            return node.Item1;
+        }
+
+        /// <summary>
+        /// Send a message to another node, looking up the node containing the id.
+        /// </summary>
+        /// <param name="id">The id used to lookup the node to send the message to.</param>
+        /// <param name="message">The message to send.</param>
+        /// <returns>A value indicating whether the message was successfully sent.</returns>
+        public MessageSendResult SendChordMessage(int id, string message)
+        {
+            var node = GetNodeContainingId(id);
+            if (node == null)
+            {
+                var result = new MessageSendResult();
+                result.MessageSent(SendResults.SendingToSelfFailure);
+                return result;
+            }
+
+            return SendMessage(node, message);
+        }
+
+        /// <summary>
+        /// Sends a message to another node, looking up the node containing the id, and awaits a response.
+        /// </summary>
+        /// <param name="id">The id used to lookup the node to send the message to.</param>
+        /// <param name="message">The message to send.</param>
+        /// <returns>
+        /// A response object that contains whether the message was successfully sent and the
+        /// response from the receiver.
+        /// </returns>
+        public MessageResponseResult SendChordMessageResponse(int id, string message)
+        {
+            var node = GetNodeContainingId(id);
+            if (node == null)
+            {
+                var result = new MessageResponseResult();
+                result.MessageSent(SendResults.SendingToSelfFailure);
+                return result;
+            }
+
+            return SendMessageResponse(node, message);
+        }
+
         /// <inheritdoc></inheritdoc>
         protected override void ApprovalGranted(NodeProperties node)
         {
@@ -158,31 +272,108 @@ namespace MeshNetwork
             {
                 lock (_successorPredecessorLockObject)
                 {
-                    var result = SendMessageResponseInternal(node, MessageType.System, "successor", true);
-                    if (result.SendResult == SendResults.Success && result.ResponseResult == ResponseResults.Success)
+                    var response = SendMessageResponseInternal(node, MessageType.System, "findsuccessor|" + _id, false);
+
+                    if (response.SendResult == SendResults.Success && response.ResponseResult == ResponseResults.Success)
                     {
-                        NodeProperties successorNode;
-                        if (result.ResponseMessage.Data == string.Empty)
+                        if (response.ResponseMessage.Data == string.Empty)
                         {
-                            successorNode = node;
+                            var idResponse = SendMessageResponseInternal(node, MessageType.System, "id", false);
+                            if (idResponse.SendResult == SendResults.Success
+                                && idResponse.ResponseResult == ResponseResults.Success)
+                            {
+                                _successor = node;
+                                _successorId = int.Parse(idResponse.ResponseMessage.Data);
+                            }
                         }
                         else
                         {
-                            successorNode = new NodeProperties(result.ResponseMessage.Data);
-                        }
-
-                        GetApproval(successorNode);
-                        var idResult = SendMessageResponseInternal(successorNode, MessageType.System, "id", true);
-                        if (idResult.SendResult == SendResults.Success
-                            && idResult.ResponseResult == ResponseResults.Success)
-                        {
-                            _successor = successorNode;
-                            _successorId = idResult.ResponseMessage.Data;
+                            string[] result = response.ResponseMessage.Data.Split('|');
+                            _successor = new NodeProperties(result[0]);
+                            _successorId = int.Parse(result[1]);
                         }
                     }
                 }
 
                 _startup = false;
+            }
+        }
+
+        /// <summary>
+        /// Gets the closest preceding node for a id.
+        /// </summary>
+        /// <param name="id">The id to search for.</param>
+        /// <returns>The closest preceding node for the id specified.</returns>
+        protected Tuple<NodeProperties, int> ClosestPrecedingNode(int id)
+        {
+            lock (_fingerTableLockObject)
+            {
+                for (int i = _fingerTable.Count - 1; i >= 0; --i)
+                {
+                    if (_fingerTable[i] != null && IsBetween(_fingerTable[i].Item2, _id, id))
+                    {
+                        return _fingerTable[i];
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Finds the successor node for the specified id.
+        /// </summary>
+        /// <param name="id">The id to find the successor node for.</param>
+        /// <returns>The successor node for the specified id.</returns>
+        protected Tuple<NodeProperties, int> FindSuccessor(int id)
+        {
+            if (IsBetween(id, _id, _successorId))
+            {
+                if (_successor == null)
+                {
+                    return null;
+                }
+
+                return new Tuple<NodeProperties, int>(_successor, _successorId);
+            }
+
+            var closest = ClosestPrecedingNode(id);
+            if (closest == null)
+            {
+                return null;
+            }
+
+            var response = SendMessageResponseInternal(
+                closest.Item1,
+                MessageType.System,
+                "findsuccessor|" + id,
+                false);
+
+            if (response.SendResult == SendResults.Success && response.ResponseResult == ResponseResults.Success)
+            {
+                if (response.ResponseMessage.Data == string.Empty)
+                {
+                    return closest;
+                }
+
+                string[] result = response.ResponseMessage.Data.Split('|');
+                return new Tuple<NodeProperties, int>(new NodeProperties(result[0]), int.Parse(result[1]));
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Fixes the finger table.
+        /// </summary>
+        protected void FixFingers()
+        {
+            lock (_fingerTableLockObject)
+            {
+                for (int i = 0; i < 31; ++i)
+                {
+                    _fingerTable[i] = FindSuccessor(GetNextId(_id, i));
+                }
             }
         }
 
@@ -193,30 +384,49 @@ namespace MeshNetwork
         }
 
         /// <summary>
-        /// Checks whether a string is between two other strings comparatively.
+        /// Gets the next id by adding 1^power to start and wrapping around all positive integers.
         /// </summary>
-        /// <param name="s">The string to compare.</param>
+        /// <param name="start">The starting value.</param>
+        /// <param name="power">The power to add.</param>
+        /// <returns>The next id by adding 1^power to start and wrapping around all positive integers.</returns>
+        protected int GetNextId(int start, int power)
+        {
+            uint temp = (uint)start;
+            temp += (uint)(1 << power);
+            if (temp > int.MaxValue)
+            {
+                temp -= int.MaxValue;
+            }
+
+            return (int)temp;
+        }
+
+        /// <summary>
+        /// Checks whether a number is between two other numbers.
+        /// </summary>
+        /// <param name="i">The number to compare.</param>
         /// <param name="min">The min value.</param>
         /// <param name="max">The max value.</param>
-        /// <returns>True if the string is between the min and max values.</returns>
-        protected bool IsBetween(string s, string min, string max)
+        /// <returns>True if the number is between the min and max values.</returns>
+        /// <remarks>If the number to check is negative, this returns false. If either the min or the max is negative, this returns true.</remarks>
+        protected bool IsBetween(int i, int min, int max)
         {
-            if (s == string.Empty)
+            if (i < 0)
             {
                 return false;
             }
 
-            if (min == string.Empty || max == string.Empty)
+            if (min < 0 || max < 0)
             {
                 return true;
             }
 
-            if (string.CompareOrdinal(min, max) < 0)
+            if (min < max)
             {
-                return string.CompareOrdinal(s, min) > 0 && string.CompareOrdinal(s, max) < 0;
+                return i > min && i < max;
             }
 
-            return string.CompareOrdinal(s, min) > 0 || string.CompareOrdinal(s, max) < 0;
+            return i > min || i < max;
         }
 
         /// <summary>
@@ -231,7 +441,7 @@ namespace MeshNetwork
                 var result = SendMessageResponseInternal(node, MessageType.System, "id", true);
                 if (result.SendResult == SendResults.Success && result.ResponseResult == ResponseResults.Success)
                 {
-                    string id = result.ResponseMessage.Data;
+                    int id = int.Parse(result.ResponseMessage.Data);
                     if (_predecessor == null || IsBetween(id, _predecessorId, _id))
                     {
                         _predecessor = node;
@@ -247,7 +457,7 @@ namespace MeshNetwork
             if (message.AwaitingResponse)
             {
                 // messages needing a response.
-                switch (message.Data)
+                switch (message.Data.Split('|')[0])
                 {
                     case "successor":
                         if (_successor == null)
@@ -274,7 +484,15 @@ namespace MeshNetwork
                         break;
 
                     case "id":
-                        SendResponseInternal(message, MessageType.System, _id);
+                        SendResponseInternal(message, MessageType.System, _id.ToString(CultureInfo.InvariantCulture));
+                        break;
+
+                    case "findsuccessor":
+                        lock (_findsuccessorLockObject)
+                        {
+                            _findSuccessorQueue.Enqueue(message);
+                        }
+
                         break;
                 }
             }
@@ -331,7 +549,7 @@ namespace MeshNetwork
                             if (idResult.SendResult == SendResults.Success
                                 && idResult.ResponseResult == ResponseResults.Success)
                             {
-                                string id = idResult.ResponseMessage.Data;
+                                int id = int.Parse(idResult.ResponseMessage.Data);
                                 if (IsBetween(id, _id, _successorId))
                                 {
                                     _successor = node;
@@ -350,6 +568,49 @@ namespace MeshNetwork
         protected override void UpdateNetwork()
         {
             Stabilize();
+
+            FixFingers();
+        }
+
+        /// <summary>
+        /// The run function for the find successor thread.
+        /// </summary>
+        private void FindSuccessorThreadRun()
+        {
+            while (ChildThreadsRunning)
+            {
+                int count;
+                lock (_findsuccessorLockObject)
+                {
+                    count = _findSuccessorQueue.Count;
+                }
+
+                while (count > 0)
+                {
+                    Message message;
+                    lock (_findsuccessorLockObject)
+                    {
+                        message = _findSuccessorQueue.Dequeue();
+                    }
+
+                    var result = FindSuccessor(int.Parse(message.Data.Split('|')[1]));
+                    if (result == null)
+                    {
+                        SendResponseInternal(message, MessageType.System, string.Empty);
+                    }
+                    else
+                    {
+                        SendResponseInternal(message, MessageType.System, result.Item1.ToString() + '|' + result.Item2);
+                    }
+
+                    lock (_findsuccessorLockObject)
+                    {
+                        count = _findSuccessorQueue.Count;
+                    }
+                }
+
+                Thread.Sleep(1);
+            }
         }
 
         /// <summary>
