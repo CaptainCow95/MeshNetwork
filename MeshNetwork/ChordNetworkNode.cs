@@ -64,7 +64,7 @@ namespace MeshNetwork
         /// <summary>
         /// The preceding node in the ring.
         /// </summary>
-        private NodeProperties _predecessor = null;
+        private NodeProperties _predecessor;
 
         /// <summary>
         /// The preceding node's id.
@@ -74,12 +74,12 @@ namespace MeshNetwork
         /// <summary>
         /// A value indicating whether the node is starting up.
         /// </summary>
-        private bool _startup = false;
+        private bool _startup;
 
         /// <summary>
         /// The next node in the ring.
         /// </summary>
-        private NodeProperties _successor = null;
+        private NodeProperties _successor;
 
         /// <summary>
         /// The next node's id.
@@ -87,14 +87,14 @@ namespace MeshNetwork
         private int _successorId = -1;
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="ChordNetworkNode" /> class.
+        /// Initializes a new instance of the <see cref="ChordNetworkNode"/> class.
         /// </summary>
         public ChordNetworkNode()
         {
         }
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="ChordNetworkNode" /> class.
+        /// Initializes a new instance of the <see cref="ChordNetworkNode"/> class.
         /// </summary>
         /// <param name="logLocation">The location to log messages to.</param>
         /// <param name="logLevel">The highest level at which log messages will be written.</param>
@@ -388,7 +388,9 @@ namespace MeshNetwork
         /// </summary>
         /// <param name="start">The starting value.</param>
         /// <param name="power">The power to add.</param>
-        /// <returns>The next id by adding 1^power to start and wrapping around all positive integers.</returns>
+        /// <returns>
+        /// The next id by adding 1^power to start and wrapping around all positive integers.
+        /// </returns>
         protected int GetNextId(int start, int power)
         {
             uint temp = (uint)start;
@@ -408,7 +410,10 @@ namespace MeshNetwork
         /// <param name="min">The min value.</param>
         /// <param name="max">The max value.</param>
         /// <returns>True if the number is between the min and max values.</returns>
-        /// <remarks>If the number to check is negative, this returns false. If either the min or the max is negative, this returns true.</remarks>
+        /// <remarks>
+        /// If the number to check is negative, this returns false. If either the min or the max is
+        /// negative, this returns true.
+        /// </remarks>
         protected bool IsBetween(int i, int min, int max)
         {
             if (i < 0)

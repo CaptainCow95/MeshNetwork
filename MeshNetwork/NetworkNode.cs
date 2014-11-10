@@ -15,7 +15,7 @@ namespace MeshNetwork
     public abstract class NetworkNode
     {
         /// <summary>
-        /// The <see cref="Logger" /> object that this node logs to.
+        /// The <see cref="Logger"/> object that this node logs to.
         /// </summary>
         private readonly Logger _logger;
 
@@ -87,7 +87,7 @@ namespace MeshNetwork
         /// <summary>
         /// Whether this node is connected to a network.
         /// </summary>
-        private bool _connected = false;
+        private bool _connected;
 
         /// <summary>
         /// The object listening for new incoming connections.
@@ -102,7 +102,7 @@ namespace MeshNetwork
         /// <summary>
         /// The current IP addresses that map to this node.
         /// </summary>
-        private IPAddress[] _currentIpAddresses = null;
+        private IPAddress[] _currentIpAddresses;
 
         /// <summary>
         /// The current message id of this node.
@@ -155,7 +155,7 @@ namespace MeshNetwork
         private Thread _updateNetworkThread;
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="NetworkNode" /> class.
+        /// Initializes a new instance of the <see cref="NetworkNode"/> class.
         /// </summary>
         protected NetworkNode()
             : this(string.Empty, LogLevels.Error)
@@ -163,7 +163,7 @@ namespace MeshNetwork
         }
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="NetworkNode" /> class.
+        /// Initializes a new instance of the <see cref="NetworkNode"/> class.
         /// </summary>
         /// <param name="logLocation">The location to log messages to.</param>
         /// <param name="logLevel">The highest level at which log messages will be written.</param>
@@ -196,7 +196,7 @@ namespace MeshNetwork
         }
 
         /// <summary>
-        /// Gets the <see cref="Logger" /> object that this node logs to.
+        /// Gets the <see cref="Logger"/> object that this node logs to.
         /// </summary>
         public Logger Logger
         {
@@ -447,10 +447,13 @@ namespace MeshNetwork
         }
 
         /// <summary>
-        /// Gets a connection to the specified node as long as that node has been approved to be connected to the network.
+        /// Gets a connection to the specified node as long as that node has been approved to be
+        /// connected to the network.
         /// </summary>
         /// <param name="connectTo">The node to connect to.</param>
-        /// <returns>The network connection associated with that node, or null if it could not be found.</returns>
+        /// <returns>
+        /// The network connection associated with that node, or null if it could not be found.
+        /// </returns>
         protected NetworkConnection GetApprovedNetworkConnection(NodeProperties connectTo)
         {
             lock (_sendingLockObject)
@@ -498,6 +501,7 @@ namespace MeshNetwork
                 {
                     _logger.Write("Attempting connection to " + connectTo, LogLevels.Info);
                     client = new TcpClient();
+                    client.NoDelay = true;
                     await client.ConnectAsync(connectTo.IpAddress, connectTo.Port).ConfigureAwait(false);
                     NetworkConnection connection = new NetworkConnection
                     {
@@ -577,7 +581,9 @@ namespace MeshNetwork
         /// <param name="sendTo">The node to send the message to.</param>
         /// <param name="type">The type of message to send.</param>
         /// <param name="message">The message to send.</param>
-        /// <param name="needsApprovedConnection">A value indicating whether the connection needs to have been approved.</param>
+        /// <param name="needsApprovedConnection">
+        /// A value indicating whether the connection needs to have been approved.
+        /// </param>
         /// <returns>A value indicating whether the message was successfully sent.</returns>
         protected MessageSendResult SendMessageInternal(NodeProperties sendTo, MessageType type, string message, bool needsApprovedConnection)
         {
@@ -604,7 +610,9 @@ namespace MeshNetwork
         /// <param name="sendTo">The node to send the message to.</param>
         /// <param name="type">The type of message to send.</param>
         /// <param name="message">The message to send.</param>
-        /// <param name="needsApprovedConnection">A value indicating whether the connection needs to have been approved.</param>
+        /// <param name="needsApprovedConnection">
+        /// A value indicating whether the connection needs to have been approved.
+        /// </param>
         /// <returns>A value indicating whether the message was successfully sent.</returns>
         protected MessageResponseResult SendMessageResponseInternal(NodeProperties sendTo, MessageType type, string message, bool needsApprovedConnection)
         {
@@ -710,14 +718,26 @@ namespace MeshNetwork
         {
             while (_childThreadsRunning)
             {
-                var incomingTcpClient = _connectionListener.AcceptTcpClient();
-                var ipEndPoint = (IPEndPoint)incomingTcpClient.Client.RemoteEndPoint;
-                var incomingNodeProperties = new NodeProperties(ipEndPoint.Address.MapToIPv4(), ipEndPoint.Port);
-                _logger.Write("Connection received from " + incomingNodeProperties, LogLevels.Info);
-
-                lock (_receivingLockObject)
+                try
                 {
-                    _receivingConnections[incomingNodeProperties] = new NetworkConnection { Client = incomingTcpClient, LastPingReceived = DateTime.UtcNow };
+                    var incomingTcpClient = _connectionListener.AcceptTcpClient();
+                    var ipEndPoint = (IPEndPoint)incomingTcpClient.Client.RemoteEndPoint;
+                    var incomingNodeProperties = new NodeProperties(ipEndPoint.Address.MapToIPv4(), ipEndPoint.Port);
+                    _logger.Write("Connection received from " + incomingNodeProperties, LogLevels.Info);
+
+                    lock (_receivingLockObject)
+                    {
+                        _receivingConnections[incomingNodeProperties] = new NetworkConnection
+                        {
+                            Client = incomingTcpClient,
+                            LastPingReceived = DateTime.UtcNow
+                        };
+                    }
+                }
+                catch (Exception)
+                {
+                    // Assuming the error was because we are stopping accepting connections or it
+                    // was a connection error in which case it can be retried.
                 }
             }
         }
@@ -727,8 +747,8 @@ namespace MeshNetwork
         /// </summary>
         private void MessageListenerThreadRun()
         {
-            const int MessageBufferSize = 1024;
-            var messageBuffer = new byte[MessageBufferSize];
+            const int messageBufferSize = 1024;
+            var messageBuffer = new byte[messageBufferSize];
             while (_childThreadsRunning)
             {
                 lock (_receivingLockObject)
@@ -743,7 +763,7 @@ namespace MeshNetwork
                         NetworkStream stream = _receivingConnections[key].Client.GetStream();
                         if (stream.DataAvailable)
                         {
-                            int bytesRead = stream.Read(messageBuffer, 0, MessageBufferSize);
+                            int bytesRead = stream.Read(messageBuffer, 0, messageBufferSize);
                             _messages[key].Message.Append(Encoding.Default.GetString(messageBuffer, 0, bytesRead));
 
                             if (_messages[key].Length == -1 && _messages[key].Message.Length > 0)

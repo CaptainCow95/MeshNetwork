@@ -11,7 +11,7 @@ namespace MeshNetwork
         /// <summary>
         /// A value indicating whether the connection has been approved to be on the network.
         /// </summary>
-        private bool _approved = false;
+        private bool _approved;
 
         /// <summary>
         /// The client used to talk to the other member.
