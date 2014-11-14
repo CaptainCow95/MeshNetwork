@@ -97,7 +97,6 @@ namespace MeshNetwork
             {
                 if (!char.IsDigit(rawMessage[index]))
                 {
-                    _messageId = messageId;
                     break;
                 }
 
@@ -105,6 +104,16 @@ namespace MeshNetwork
                 messageId += (uint)char.GetNumericValue(rawMessage[index]);
                 ++index;
             }
+
+            if (messageId == uint.MaxValue)
+            {
+                _messageId = null;
+            }
+            else
+            {
+                _messageId = messageId;
+            }
+
 
             while (index < rawMessage.Length)
             {
@@ -384,13 +393,14 @@ namespace MeshNetwork
             }
 
             string responseString;
+            uint messageId = _messageId.HasValue ? _messageId.Value : uint.MaxValue;
             if (_waitingForResponse)
             {
-                responseString = "t" + _messageId;
+                responseString = "t" + messageId;
             }
             else
             {
-                responseString = "f" + _messageId;
+                responseString = "f" + messageId;
             }
 
             string portString = _sender.Port + ":";

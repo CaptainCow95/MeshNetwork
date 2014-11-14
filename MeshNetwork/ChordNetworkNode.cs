@@ -434,6 +434,37 @@ namespace MeshNetwork
             return i > min || i < max;
         }
 
+        protected override void NodeDisconnected(NodeProperties node)
+        {
+            base.NodeDisconnected(node);
+
+            lock (_successorPredecessorLockObject)
+            {
+                if (_successor.Equals(node))
+                {
+                    _successor = null;
+                    _successorId = -1;
+                }
+
+                if (_predecessor.Equals(node))
+                {
+                    _predecessor = null;
+                    _predecessorId = -1;
+                }
+            }
+
+            lock (_fingerTableLockObject)
+            {
+                for (int i = 0; i < _fingerTable.Count; ++i)
+                {
+                    if (_fingerTable[i].Item1.Equals(node))
+                    {
+                        _fingerTable[i] = null;
+                    }
+                }
+            }
+        }
+
         /// <summary>
         /// A node has just stabilized to be connected to this node.
         /// </summary>
@@ -526,11 +557,8 @@ namespace MeshNetwork
             {
                 if (_successor == null)
                 {
-                    if (IsBetween(_predecessorId, _id, _successorId))
-                    {
-                        _successor = _predecessor;
-                        _successorId = _predecessorId;
-                    }
+                    _successor = _predecessor;
+                    _successorId = _predecessorId;
 
                     // Only notify if we actually have someone to notify besides ourselves.
                     if (_successor != null)

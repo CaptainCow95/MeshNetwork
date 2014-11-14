@@ -526,7 +526,7 @@ namespace MeshNetwork
 
                     lock (_sendingLockObject)
                     {
-                        _sendingConnections.Remove(connectTo);
+                        NodeDisconnected(connectTo);
                     }
 
                     return null;
@@ -567,6 +567,11 @@ namespace MeshNetwork
             }
 
             return _currentIpAddresses.Contains(node.IpAddress) && node.Port == _port;
+        }
+
+        protected virtual void NodeDisconnected(NodeProperties node)
+        {
+            _sendingConnections.Remove(node);
         }
 
         /// <summary>
@@ -1049,7 +1054,7 @@ namespace MeshNetwork
                 connection.Client.Close();
                 lock (_sendingLockObject)
                 {
-                    _sendingConnections.Remove(message.Destination);
+                    NodeDisconnected(message.Destination);
                 }
 
                 lock (_receivingLockObject)
